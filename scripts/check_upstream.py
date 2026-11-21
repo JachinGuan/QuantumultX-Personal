@@ -16,8 +16,10 @@ from urllib.parse import urlsplit
 
 if __package__:
     from . import upstream_graph as graph
+    from .module_registry import load_modules, select_sources
 else:
     import upstream_graph as graph
+    from module_registry import load_modules, select_sources
 
 ROOT = Path(__file__).resolve().parents[1]
 LIMIT = 2 * 1024 * 1024
@@ -364,7 +366,7 @@ def render(sources, previous, observations):
     return report, body, bool(changes)
 
 
-def graph_report(sources, previous, previous_graph, approved, export=None):
+def graph_report(sources, previous, previous_graph, approved, export=None, *, paused=()):
     monitor = graph.GraphMonitor(validate, profile, InvalidContent)
     roots = {name: monitor.load(source["url"], source["kind"], source)
              for name, source in sources.items()}
@@ -398,6 +400,7 @@ def graph_report(sources, previous, previous_graph, approved, export=None):
     )
     summary = [
         f"## 上游依赖检查 · {monitor.checked}", "",
+        f"- 暂停上游监控（保留基线） · {', '.join(paused) or '无'}",
         f"- 已验证入口 {len(snapshots)}/{len(sources)}，有效入口和依赖共 {sum(not isinstance(r, str) for r in monitor.cache.values())} 份。",
         f"- 候选记录变化 {len(blocks)} 项，候选冻结，Approved 由人工指定。",
         "- 静态线索不能证明安全或数据外传。未执行或发布第三方代码。", "",
@@ -549,12 +552,13 @@ def main():
     default_lock = ROOT / "manifests/approved.json"
     if approved_path is None and default_lock.is_file():
         approved_path = default_lock
+    active, paused = select_sources(sources, load_modules(ROOT / "upstream/modules.json"))
     report, body, comments = graph_report(
-        sources, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir
+        active, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir, paused=paused
     )
     if not args.dry_run:
         publish_issue(request, body, comments)
-        print(f"Checked {len(sources)} sources; details recorded in Issue #1.")
+        print(f"Checked {len(active)} sources; details recorded in Issue #1.")
     else:
         print(report)
 

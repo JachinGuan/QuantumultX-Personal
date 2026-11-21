@@ -1,0 +1,105 @@
+{
+  "RedditAds": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "RedditEnhance": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "review",
+    "risk_status": "watch"
+  },
+  "BiliBiliAdsLite": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "Spotify": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "StartUpAds": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "CaiYunAds": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "review",
+    "risk_status": "watch"
+  },
+  "ZhiHu": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "YouTubeAds": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "AmapAds": {
+    "monitor_enabled": true,
+    "client_enabled": false,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "compatibility_concern",
+    "client_report": {
+      "reported_on": "2026-11-21",
+      "basis": "user_report",
+      "summary": "无线 CarPlay 导航时曾偶发从路线导航退回巡航模式。用户已停用高德去广告模块，停用后暂未复现。故障偶发，因果未证实。"
+    }
+  },
+  "GoogleRedirect": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "review",
+    "risk_status": "watch"
+  },
+  "XiaoHongShu": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "BoxJS": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "WeatherKit": {
+    "monitor_enabled": true,
+    "client_enabled": null,
+    "managed": false,
+    "update_policy": "frozen",
+    "risk_status": "watch"
+  },
+  "ReleaseCheck": {
+    "monitor_enabled": false,
+    "client_enabled": null,
+    "managed": true,
+    "update_policy": "review",
+    "risk_status": "watch"
+  }
+}

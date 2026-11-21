@@ -11,9 +11,11 @@ import stat
 from time import monotonic
 
 if __package__:
+    from .module_registry import ROOT, require_publication
     from .upstream_graph import packed, sha, snapshot_version
     from .upstream_transport import MAX_BYTES, download, endpoint
 else:
+    from module_registry import ROOT, require_publication
     from upstream_graph import packed, sha, snapshot_version
     from upstream_transport import MAX_BYTES, download, endpoint
 
@@ -21,11 +23,32 @@ ENTRY = "ReleaseCheck"
 HEX = re.compile(r"[a-f0-9]{64}")
 PILOT = "pilot/ReleaseCheck.conf"
 SOURCE_BASE = "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/"
-SOURCE_PATTERN = re.compile(re.escape(SOURCE_BASE) + r"[a-f0-9]{40}/" + re.escape(PILOT))
 MITM_HOST = "example.com"
 RULE = r"^https:\/\/example\.com/qx-release-check(?:[/?#]|$) url 302 https://example.org/"
 FILE = "ReleaseCheck.conf"
 METADATA_LIMIT = 128 * 1024
+
+
+@dataclass(frozen=True)
+class PublicationPolicy:
+    source_pattern: re.Pattern
+    mitm_host: str
+    rule: str
+
+
+POLICIES = {
+    ENTRY: PublicationPolicy(
+        re.compile(re.escape(SOURCE_BASE) + r"[a-f0-9]{40}/" + re.escape(PILOT)),
+        MITM_HOST,
+        RULE,
+    ),
+}
+
+
+def publication_policy(module):
+    if module not in POLICIES:
+        raise ValueError("该模块缺少已实现的专用发布校验策略")
+    return POLICIES[module]
 
 
 @dataclass(frozen=True)
@@ -68,13 +91,14 @@ def parse_json(data):
     return value
 
 
-def validate_rule(data):
+def validate_rule(data, *, module=ENTRY):
+    policy = publication_policy(module)
     text = data.decode("utf-8").replace("\r\n", "\n")
     if any((ord(char) < 32 and char not in "\n\t") or ord(char) > 126 for char in text):
         raise ValueError("试点仅接受 ASCII 规则与注释")
     lines = [line for line in text.split("\n") if line.strip() and not line.startswith("#")]
-    if lines != [f"hostname = {MITM_HOST}", RULE]:
-        raise ValueError("仅支持明确限制 example.com 诊断路径的单条 HTTPS 目标 302 规则")
+    if lines != [f"hostname = {policy.mitm_host}", policy.rule]:
+        raise ValueError(f"{module} 规则与专用发布校验策略不一致")
 
 
 def valid_version(version):
@@ -83,25 +107,26 @@ def valid_version(version):
     return version
 
 
-def load_snapshot(input_dir, version):
+def load_snapshot(input_dir, version, *, module=ENTRY):
+    policy = publication_policy(module)
     valid_version(version)
-    with directory(input_dir) as base, directory(ENTRY, base) as entry, directory(version, entry) as snapshot:
+    with directory(input_dir) as base, directory(module, base) as entry, directory(version, entry) as snapshot:
         if set(os.listdir(snapshot)) != {"manifest.json", "objects"}:
             raise ValueError("快照存在缺失或意外文件")
         raw = read_file(snapshot, "manifest.json", METADATA_LIMIT)
         manifest = parse_json(raw)
         source = manifest.get("root")
-        if (not isinstance(source, str) or not SOURCE_PATTERN.fullmatch(source)
-                or manifest.get("entry") != ENTRY
+        if (not isinstance(source, str) or not policy.source_pattern.fullmatch(source)
+                or manifest.get("entry") != module
                 or manifest.get("version") != version or manifest.get("review_status") != "candidate"
                 or manifest.get("graph_complete") is not True or manifest.get("fetch_failed") is not False
                 or manifest.get("frozen") is not True or manifest.get("approval_eligible") is not True
                 or manifest.get("dependencies") != [] or manifest.get("issues") != []
-                or manifest.get("mitm") != [MITM_HOST]):
-            raise ValueError("仅接受通过完整性检查且没有依赖的 ReleaseCheck 候选")
+                or manifest.get("mitm") != [policy.mitm_host]):
+            raise ValueError(f"仅接受通过完整性检查且没有依赖的 {module} 候选")
         files = manifest.get("files")
         if not isinstance(files, dict) or set(files) != {source} or not isinstance(files[source], dict):
-            raise ValueError("依赖闭包必须恰好包含 ReleaseCheck 入口")
+            raise ValueError(f"依赖闭包必须恰好包含 {module} 入口")
         node = files[source]
         digest = valid_version(node.get("sha256"))
         endpoint(source)
@@ -120,9 +145,9 @@ def load_snapshot(input_dir, version):
             data = read_file(objects, filename, MAX_BYTES)
     if sha(data) != digest:
         raise ValueError("入口文件 SHA-256 不匹配")
-    validate_rule(data)
+    validate_rule(data, module=module)
     # Only immutable bytes leave this function. Publication never opens the source again.
-    return Snapshot(data, {"schema": 1, "entry": ENTRY, "version": version,
+    return Snapshot(data, {"schema": 1, "entry": module, "version": version,
                            "manifest_sha256": sha(raw), "files": {source: digest}})
 
 
@@ -132,12 +157,13 @@ def approval_binding(reviewed):
 
 def check_approval(manifests, reviewed, *, require_active):
     version = reviewed.review["version"]
+    module = reviewed.review["entry"]
     with directory(manifests) as root:
         if require_active:
             active = parse_json(read_file(root, "approved.json", METADATA_LIMIT))
-            if active.get(ENTRY) != approval_binding(reviewed):
+            if active.get(module) != approval_binding(reviewed):
                 raise ValueError("人工批准锁未绑定当前版本与清单 SHA-256")
-        with directory("approvals", root) as approvals, directory(ENTRY, approvals) as entry:
+        with directory("approvals", root) as approvals, directory(module, approvals) as entry:
             record = parse_json(read_file(entry, version + ".json", METADATA_LIMIT))
     if packed(record) != packed(reviewed.review):
         raise ValueError("受审记录与快照清单或入口字节不一致")
@@ -159,18 +185,19 @@ def write_new(parent, name, data):
 def publish(reviewed, manifests, output):
     check_approval(manifests, reviewed, require_active=True)
     version = reviewed.review["version"]
+    module = reviewed.review["entry"]
     with directory(output) as root:
         try:
-            os.mkdir(ENTRY, dir_fd=root)
+            os.mkdir(module, dir_fd=root)
         except FileExistsError:
             pass
-        with directory(ENTRY, root) as entry:
+        with directory(module, root) as entry:
             # Exclusive directory creation rejects duplicates, including partial prior output.
             os.mkdir(version, dir_fd=entry)
             names = []
             try:
                 with directory(version, entry) as release:
-                    for name, data in ((FILE, reviewed.data), ("receipt.json", packed(reviewed.review) + b"\n")):
+                    for name, data in ((module + ".conf", reviewed.data), ("receipt.json", packed(reviewed.review) + b"\n")):
                         names.append(name)
                         write_new(release, name, data)
             except OSError:
@@ -187,12 +214,13 @@ def publish(reviewed, manifests, output):
 def verify_rollback(reviewed, manifests, output):
     check_approval(manifests, reviewed, require_active=False)
     version = reviewed.review["version"]
-    with directory(output) as root, directory(ENTRY, root) as entry, directory(version, entry) as release:
-        if set(os.listdir(release)) != {FILE, "receipt.json"}:
+    module = reviewed.review["entry"]
+    with directory(output) as root, directory(module, root) as entry, directory(version, entry) as release:
+        if set(os.listdir(release)) != {module + ".conf", "receipt.json"}:
             raise ValueError("旧发布目录不完整")
         if packed(parse_json(read_file(release, "receipt.json", METADATA_LIMIT))) != packed(reviewed.review):
             raise ValueError("旧发布凭据与受审快照不一致")
-        if read_file(release, FILE, MAX_BYTES) != reviewed.data:
+        if read_file(release, module + ".conf", MAX_BYTES) != reviewed.data:
             raise ValueError("旧发布文件与受审快照不一致")
 
 
@@ -200,12 +228,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("review", "publish", "verify-origin", "verify-rollback"))
     parser.add_argument("version")
+    parser.add_argument("--module", default=ENTRY)
+    parser.add_argument("--registry", type=Path, default=ROOT / "upstream/modules.json")
     parser.add_argument("--input-dir", type=Path, default=Path("release-inputs"))
     parser.add_argument("--manifests", type=Path, default=Path("manifests"))
     parser.add_argument("--output", type=Path, default=Path("published"))
     args = parser.parse_args()
     try:
-        result = load_snapshot(args.input_dir, args.version)
+        if args.action in ("verify-origin", "publish"):
+            require_publication(args.module, args.registry)
+        result = load_snapshot(args.input_dir, args.version, module=args.module)
         if args.action == "review":
             print(json.dumps(result.review, indent=2))
         elif args.action == "publish":

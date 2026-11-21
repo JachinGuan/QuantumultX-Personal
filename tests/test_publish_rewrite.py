@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -167,6 +168,31 @@ class ReleaseTests(unittest.TestCase):
         for data, url in ((SAFE + b"# extra", SOURCE), (SAFE, "https://elsewhere.example/a.conf")):
             with self.assertRaisesRegex(ValueError, "来源字节"):
                 release.verify_origin(self.reviewed, lambda *args: Download(data, url, "text/plain"))
+
+    def test_modules_with_same_version_have_separate_approval_and_rollback(self):
+        self.approve_fixture()
+        other = "OtherFixture"
+        candidate = self.inputs / other / self.version
+        shutil.copytree(self.candidate, candidate)
+        manifest = candidate / "manifest.json"
+        metadata = json.loads(manifest.read_bytes())
+        manifest.write_text(json.dumps({**metadata, "entry": other}))
+        with patch.dict(release.POLICIES, {other: release.POLICIES[release.ENTRY]}):
+            reviewed_other = release.load_snapshot(self.inputs, self.version, module=other)
+            with self.assertRaisesRegex(ValueError, "人工批准锁"):
+                release.publish(reviewed_other, self.manifests, self.output)
+            active = json.loads(self.active.read_bytes())
+            self.active.write_text(json.dumps({**active, other: release.approval_binding(reviewed_other)}))
+            other_records = self.approvals.parent / other
+            other_records.mkdir()
+            (other_records / self.record.name).write_text(json.dumps(reviewed_other.review))
+            release.publish(reviewed_other, self.manifests, self.output)
+            with self.assertRaises(FileNotFoundError):
+                release.verify_rollback(self.reviewed, self.manifests, self.output)
+            release.publish(self.reviewed, self.manifests, self.output)
+            for reviewed, name in ((self.reviewed, release.ENTRY), (reviewed_other, other)):
+                release.verify_rollback(reviewed, self.manifests, self.output)
+                self.assertEqual((self.output / name / self.version / (name + ".conf")).read_bytes(), SAFE)
 
     def test_failed_staging_leaves_no_release(self):
         self.approve_fixture()

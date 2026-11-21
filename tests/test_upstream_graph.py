@@ -233,6 +233,10 @@ class GraphTests(unittest.TestCase):
             sources = repo / "upstream/sources.json"
             sources.parent.mkdir()
             sources.write_text(json.dumps(SOURCES))
+            (sources.parent / "modules.json").write_text(json.dumps({
+                "Example": {"monitor_enabled": True, "client_enabled": None, "managed": False,
+                            "update_policy": "review", "risk_status": "watch"},
+            }))
             lock = repo / "manifests/approved.json"
             lock.parent.mkdir()
             lock.write_text(json.dumps({"ReleaseCheck": {"version": digest, "manifest_sha256": "b" * 64}}))

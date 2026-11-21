@@ -38,6 +38,9 @@ class WorkflowTests(unittest.TestCase):
             git("config", "user.email", "fixture@example.invalid")
             git("remote", "add", "origin", str(bare))
             shutil.copytree(SCRIPTS, repo / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+            registry = repo / "upstream/modules.json"
+            registry.parent.mkdir()
+            shutil.copyfile(SCRIPTS.parent / "upstream/modules.json", registry)
             lock = repo / "manifests/approved.json"
             lock.parent.mkdir()
             lock.write_text("{}\n")
@@ -69,7 +72,17 @@ class WorkflowTests(unittest.TestCase):
                 git("add", "manifests/approved.json")
                 git("commit", "-m", "Fixture human approval")
                 worktree = root / f"release-{i}"
-                action("build", version, worktree)
+                if i == 0:
+                    original_registry = registry.read_text()
+                    modules = json.loads(original_registry)
+                    modules[release.ENTRY]["update_policy"] = "frozen"
+                    registry.write_text(json.dumps(modules))
+                    blocked = action("build", version, root / "frozen", release.ENTRY, check=False)
+                    self.assertNotEqual(blocked.returncode, 0)
+                    unmanaged = action("build", version, root / "unmanaged", "AmapAds", check=False)
+                    self.assertNotEqual(unmanaged.returncode, 0)
+                    registry.write_text(original_registry)
+                action("build", version, worktree, release.ENTRY)
                 action("push", version, worktree)
                 commit = git("--git-dir", str(bare), "rev-parse", "refs/heads/rewrite-publications").stdout.decode().strip()
                 path = f"published/ReleaseCheck/{version}/{release.FILE}"
@@ -79,8 +92,14 @@ class WorkflowTests(unittest.TestCase):
                 duplicate = action("build", version, root / f"duplicate-{i}", check=False)
                 self.assertNotEqual(duplicate.returncode, 0)
             first = published[0][1].split("/")[2]
-            reviewed = release.load_snapshot(repo / "release-inputs", first)
-            release.verify_rollback(reviewed, repo / "manifests", root / "release-1/published")
+            modules = json.loads(registry.read_text())
+            modules[release.ENTRY]["update_policy"] = "frozen"
+            registry.write_text(json.dumps(modules))
+            subprocess.run(
+                ["python3", "scripts/publish_rewrite.py", "verify-rollback", first,
+                 "--module", release.ENTRY, "--output", str(root / "release-1/published")],
+                cwd=repo, check=True, capture_output=True,
+            )
 
     def test_preparation_rejects_current_upstream_shape_without_writing_material(self):
         raw = br"""hostname = www.google.cn
