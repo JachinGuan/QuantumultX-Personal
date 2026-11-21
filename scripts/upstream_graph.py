@@ -177,7 +177,7 @@ class GraphMonitor:
             "entry": name, "version": sha(packed(identity)), "checked_at": self.checked,
             "root": source["url"], "files": nodes, "dependencies": relations, "issues": issues,
             "mitm": mitm, "graph_complete": not issues, "fetch_failed": failed,
-            "review_status": "candidate", "frozen": True,
+            "review_status": "candidate", "frozen": True, "approval_eligible": not issues,
         }
 
     def export(self, directory, snapshot):
@@ -239,12 +239,41 @@ def read_graph(body):
     if not decoder.eof or decoder.unused_data or len(raw) > STATE_LIMIT:
         raise ValueError("依赖状态编码无效或超过长度限制")
     value = json.loads(raw)
-    if not isinstance(value, dict) or any(
-        not isinstance(record, dict) or not isinstance(record.get("files"), dict)
-        or not SHA.fullmatch(str(record.get("version", ""))) for record in value.values()
-    ):
+    if not isinstance(value, dict):
         raise ValueError("依赖状态结构无效")
-    return value
+    return {name: baseline_record(record) for name, record in value.items()}
+
+
+def complete_snapshot(snapshot):
+    return (
+        isinstance(snapshot, dict) and snapshot.get("graph_complete") is True
+        and not snapshot.get("issues") and not snapshot.get("fetch_failed")
+        and isinstance(snapshot.get("files"), dict)
+        and SHA.fullmatch(str(snapshot.get("version", ""))) is not None
+    )
+
+
+def baseline_record(record):
+    if not isinstance(record, dict):
+        raise ValueError("依赖状态结构无效")
+    if "last_observed" in record:
+        observed = record["last_observed"]
+        complete = record["last_complete"]
+        if (not isinstance(observed, dict) or not SHA.fullmatch(str(observed.get("version", "")))
+                or type(observed.get("graph_complete")) is not bool
+                or complete is not None and not complete_snapshot(complete)):
+            raise ValueError("依赖状态结构无效")
+        if observed["graph_complete"] and (complete is None or complete["version"] != observed["version"]):
+            raise ValueError("完整依赖状态与最近观察不一致")
+        return record
+    if not isinstance(record.get("files"), dict) or not SHA.fullmatch(str(record.get("version", ""))):
+        raise ValueError("依赖状态结构无效")
+    older = record.get("last_complete")
+    complete = record if complete_snapshot(record) else older if complete_snapshot(older) else None
+    return {
+        "last_observed": {"version": record["version"], "graph_complete": complete_snapshot(record)},
+        "last_complete": complete,
+    }
 
 
 def serialize_graph(state):
@@ -297,7 +326,7 @@ def changes(name, before, after, legacy, approved):
     reasons = set()
     for url in sorted(old_files.keys() | new_files.keys()):
         old, new = old_files.get(url, {}), new_files.get(url, {})
-        if old == new or not new and after["fetch_failed"]:
+        if old == new or not new and not after["graph_complete"]:
             continue
         location = file_label(url)
         old_hash = old.get("sha256", legacy.get("sha256") if url == after["root"] and initial else None)
@@ -352,11 +381,11 @@ def changes(name, before, after, legacy, approved):
     after_edges = {(origin, target, mechanism): line for origin, target, line, mechanism in after["dependencies"]}
     added = after_edges.keys() - before_edges.keys()
     removed = before_edges.keys() - after_edges.keys()
-    if after["fetch_failed"]:
-        details.append("- 下载或预算限制使本轮依赖图不完整，冻结候选并保留上次可下载的比较基线。")
+    if not after["graph_complete"]:
+        details.append("- 本轮依赖图不完整，候选不可进入批准流程，保留上次完整图用于比较。")
     for prefix, edge_keys, edges in (
         ("首次观察" if initial else "新增", added, after_edges),
-        ("移除", removed if not after["fetch_failed"] else set(), before_edges),
+        ("移除", removed if after["graph_complete"] else set(), before_edges),
     ):
         for origin, target, mechanism in sorted(edge_keys, key=packed)[:12]:
             destination = file_label(target) if target else "目标未知"
@@ -393,14 +422,16 @@ def report_blocks(sources, snapshots, before, legacy, approved):
         after = snapshots.get(name)
         if after is None:
             continue
-        old = before.get(name, {})
-        prior = old.get("last_complete", old) if old else {}
-        status = old.get("version") != after["version"]
-        if status:
+        old = baseline_record(before[name]) if name in before else {}
+        prior = old.get("last_complete")
+        observed = {"version": after["version"], "graph_complete": after["graph_complete"]}
+        if old.get("last_observed") != observed:
             block = changes(name, prior or {}, after, legacy.get(name, {}), approved.get(name))
-            if old and (prior or {}).get("version") == after["version"]:
-                block.insert(3, "- 下载已恢复，候选与上一次可下载的版本一致。")
+            if prior and prior["version"] == after["version"]:
+                block.insert(3, "- 依赖图已恢复，候选与上一次完整版本一致。")
             blocks.append(block)
-        # Failed downloads are never treated as disappearing dependencies.
-        current[name] = {**after, "last_complete": prior or None} if after["fetch_failed"] else after
+        current[name] = {
+            "last_observed": observed,
+            "last_complete": after if after["graph_complete"] else prior,
+        }
     return current, blocks

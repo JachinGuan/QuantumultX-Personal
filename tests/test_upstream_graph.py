@@ -105,6 +105,37 @@ class GraphTests(unittest.TestCase):
                 _, repeated = graph.report_blocks(SOURCES, {"Example": after}, state, {}, {})
                 self.assertEqual(repeated, [])
 
+    def test_success_two_different_failures_then_recovery(self):
+        good = {ROOT: fixture(rewrite()), FIRST: fixture(b'import "./second.js";', FIRST),
+                SECOND: fixture(b"const second = 1;", SECOND)}
+        _, complete = self.run_graph(good)
+        state, _ = graph.report_blocks(SOURCES, {"Example": complete}, {}, {}, {})
+        for url in (FIRST, SECOND):
+            _, incomplete = self.run_graph({**good, url: TimeoutError()})
+            state, reports = graph.report_blocks(SOURCES, {"Example": incomplete}, state, {}, {})
+            self.assertEqual(state["Example"]["last_complete"], complete)
+            self.assertEqual(state["Example"]["last_observed"]["version"], incomplete["version"])
+            self.assertNotIn("files", state["Example"])
+            self.assertIn(graph.file_label(url), "\n".join(reports[0]))
+            self.assertNotIn("依赖移除", "\n".join(reports[0]))
+        state, reports = graph.report_blocks(SOURCES, {"Example": complete}, state, {}, {})
+        self.assertIn("依赖图已恢复", "\n".join(reports[0]))
+        self.assertEqual(state["Example"]["last_complete"], complete)
+
+    def test_unresolved_never_replaces_complete_or_becomes_approval_eligible(self):
+        good = {ROOT: fixture(rewrite()), FIRST: fixture(b"const value = 1;", FIRST)}
+        _, complete = self.run_graph(good)
+        _, dynamic = self.run_graph({**good, FIRST: fixture(b'import(dynamicUrl);', FIRST)})
+        self.assertFalse(dynamic["fetch_failed"])
+        self.assertFalse(dynamic["approval_eligible"])
+        state, reports = graph.report_blocks(SOURCES, {"Example": dynamic}, {"Example": complete}, {}, {})
+        self.assertEqual(state["Example"]["last_complete"], complete)
+        self.assertIn("不可进入批准流程", "\n".join(reports[0]))
+        migrated = graph.read_graph(graph.serialize_graph({"Example": {**dynamic, "last_complete": complete}}))
+        self.assertEqual(migrated, graph.read_graph(graph.serialize_graph(state)))
+        only_dynamic = graph.read_graph(graph.serialize_graph({"Example": dynamic}))
+        self.assertIsNone(only_dynamic["Example"]["last_complete"])
+
     def test_depth_file_and_total_size_limits(self):
         files = {ROOT: fixture(rewrite()), FIRST: fixture(b'import "./second.js";', FIRST),
                  SECOND: fixture(b"const second = 1;", SECOND)}

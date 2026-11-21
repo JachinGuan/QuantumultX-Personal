@@ -1,6 +1,7 @@
 """Validate external QX resources as text and record findings in GitHub Issue #1."""
 
 import argparse
+import base64
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+import zlib
 from urllib.parse import urlsplit
 
 if __package__:
@@ -409,13 +411,6 @@ def graph_report(sources, previous, previous_graph, approved, export=None):
     summary = "\n".join(summary)
     state = json.dumps(current, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c")
     tail = f"\n\n{BEGIN}\n{state}\n{END}\n{graph.serialize_graph(next_graph)}"
-    room = 64000 - len(summary.encode()) - len(tail.encode())
-    if room < 200:
-        raise ValueError("依赖状态超出 Issue 容量，旧基线已保留")
-    brief = details or "- 无候选变化。"
-    if len(brief.encode()) > room:
-        brief = brief.encode()[:room - 100].decode(errors="ignore").rsplit("\n", 1)[0]
-        brief += "\n- 其余变化见本次 Issue 评论。"
     comments = []
     if details:
         page = f"### 依赖变更 · {monitor.checked}\n"
@@ -429,6 +424,13 @@ def graph_report(sources, previous, previous_graph, approved, export=None):
             page += line + "\n"
             page_size += line_size
         comments.append(page)
+    room = 64000 - len(summary.encode()) - len(tail.encode()) - len(issue_outbox(comments).encode())
+    if room < 200:
+        raise ValueError("依赖状态超出 Issue 容量，（含待发评论），旧基线已保留")
+    brief = details or "- 无候选变化。"
+    if len(brief.encode()) > room:
+        brief = brief.encode()[:room - 100].decode(errors="ignore").rsplit("\n", 1)[0]
+        brief += "\n- 其余变化见本次 Issue 评论。"
     return summary + "\n" + (details or brief), summary + "\n" + brief + tail, comments
 
 
@@ -448,6 +450,71 @@ def github_request(repo, token, suffix="", payload=None, method="GET"):
         return json.load(response)
 
 
+OUTBOX_BEGIN = "<!-- QX_OUTBOX_BEGIN -->"
+OUTBOX_END = "<!-- QX_OUTBOX_END -->"
+
+
+def issue_outbox(comments):
+    if not comments:
+        return ""
+    raw = graph.packed(comments)
+    if len(raw) > graph.STATE_LIMIT:
+        raise ValueError("待发评论超过存储上限，旧基线已保留")
+    encoded = base64.b64encode(zlib.compress(raw, level=9)).decode()
+    return f"\n{OUTBOX_BEGIN}\n{encoded}\n{OUTBOX_END}"
+
+
+def read_outbox(body):
+    if OUTBOX_BEGIN not in body and OUTBOX_END not in body:
+        return body, []
+    clean, _, rest = body.partition("\n" + OUTBOX_BEGIN + "\n")
+    encoded, separator, trailing = rest.partition("\n" + OUTBOX_END)
+    if not separator or trailing.strip() or len(encoded) > 64000:
+        raise ValueError("待发评论状态损坏")
+    decoder = zlib.decompressobj()
+    raw = decoder.decompress(base64.b64decode(encoded, validate=True), graph.STATE_LIMIT + 1)
+    if not decoder.eof or decoder.unused_data or len(raw) > graph.STATE_LIMIT:
+        raise ValueError("待发评论状态损坏")
+    comments = json.loads(raw)
+    if not isinstance(comments, list) or not comments or any(
+        not isinstance(comment, str) or not comment or len(comment.encode()) > 24000 for comment in comments
+    ):
+        raise ValueError("待发评论结构无效")
+    return clean, comments
+
+
+def deliver_outbox(request, body):
+    clean, comments = read_outbox(body)
+    if not comments:
+        return clean
+    version = digest(body.encode())
+    pending = {
+        f"<!-- QX_REPORT:{version}:{index} -->\n{comment}" for index, comment in enumerate(comments)
+    }
+    page = 1
+    while pending:
+        existing = request(f"/comments?per_page=100&page={page}")
+        pending.difference_update(item.get("body") or "" for item in existing)
+        if len(existing) < 100:
+            break
+        page += 1
+    for index, comment in enumerate(comments):
+        marked = f"<!-- QX_REPORT:{version}:{index} -->\n{comment}"
+        if marked in pending:
+            request("/comments", {"body": marked}, "POST")
+    request(payload={"body": clean}, method="PATCH")
+    return clean
+
+
+def publish_issue(request, body, comments):
+    pending_body = body + issue_outbox(comments)
+    if len(pending_body.encode()) > 64000:
+        raise ValueError("待发评论超出 Issue 容量，旧基线已保留")
+    request(payload={"body": pending_body}, method="PATCH")
+    if comments:
+        deliver_outbox(request, pending_body)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print findings and skip all GitHub issue requests")
@@ -465,7 +532,10 @@ def main():
         issue_body = args.baseline.read_text(encoding="utf-8") if args.baseline else ""
     else:
         repo, token = os.environ["GH_REPO"], os.environ["GH_TOKEN"]
-        issue = github_request(repo, token)
+        def request(suffix="", payload=None, method="GET"):
+            return github_request(repo, token, suffix, payload, method)
+
+        issue = request()
         if issue.get("title") != ISSUE_TITLE or "pull_request" in issue:
             raise ValueError("Issue #1 does not match the monitor issue")
         issue_body = issue["body"]
@@ -473,6 +543,8 @@ def main():
             raise ValueError("Issue #1 的基线为空")
     previous = read_state(issue_body) if issue_body else {}
     previous_graph = graph.read_graph(issue_body)
+    if not args.dry_run:
+        deliver_outbox(request, issue_body)
     approved_path = args.approved_lock
     default_lock = ROOT / "manifests/approved.json"
     if approved_path is None and default_lock.is_file():
@@ -481,9 +553,7 @@ def main():
         sources, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir
     )
     if not args.dry_run:
-        for comment in comments:
-            github_request(repo, token, "/comments", {"body": comment}, "POST")
-        github_request(repo, token, payload={"body": body}, method="PATCH")
+        publish_issue(request, body, comments)
         print(f"Checked {len(sources)} sources; details recorded in Issue #1.")
     else:
         print(report)
