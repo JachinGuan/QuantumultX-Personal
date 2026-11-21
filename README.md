@@ -57,19 +57,25 @@ hostname = www.google.cn
 
 ### 候选、审核与批准
 
-1. 用 `python3 scripts/check_upstream.py --dry-run --candidate-dir candidates` 获取候选。找到 `candidates/GoogleRedirect/<版本>`，并以 `python3 scripts/publish_rewrite.py review <版本> --input-dir candidates` 校验。命令仅输出审核记录，供人工核对内容、完整闭包和哈希。
-2. 在独立的批准 PR 中，将整份候选快照复制到 `release-inputs/GoogleRedirect/<版本>/`。保留原始 `manifest.json` 与 `objects/` 的字节。将审核命令输出放入 `manifests/approvals/GoogleRedirect/<版本>.json`，再将 `manifests/approved.json` 的 `GoogleRedirect` 指向该版本。审核者应独立检查快照和审核记录，确认目标域名、规则行为、文件与清单哈希，并人工合并批准 PR。保留旧快照及历史批准记录。
-3. 用 GitHub 保护 `main`，要求批准 PR 独立审查，并限制直接推送。先配置 `rewrite-release` 环境，仅允许受保护的 `main` 发布，启用必需审核者与禁止自审（如仓库方案支持）。工作流检查分支保护状态；必需审核者由仓库管理员配置。保护 `rewrite-publications` 分支，禁止强推、删除和旁路写入，允许指定的发布流程推送。
+1. 在 GitHub Actions 手动运行 **Prepare GoogleRedirect approval materials**，选择受保护的 `main`。任务从固定原始地址重新下载，使用与发布器相同的策略校验候选。通过后将原字节和审核记录写入独立的 `review/google-redirect-*` 提案分支，运行摘要提供创建批准 PR 的链接。准备任务不修改 `manifests/approved.json`。
+2. 用 iPad 浏览器打开提案链接。独立审核者应核对工作流运行、`release-inputs/GoogleRedirect/<版本>/` 的原始文件与清单，以及 `manifests/approvals/GoogleRedirect/<版本>.json` 的哈希。由操作员在提案分支上用 GitHub 网页编辑 `manifests/approved.json`，将 `GoogleRedirect` 指向该版本。审核者检查最终差异后，再由有权限的人手动合并批准 PR。无需上传文件。保留旧快照和审核记录。
+3. 当前试点仅用 Fixture 验证。现行上游会在第 1 步被拒绝，因而不会生成提案分支。若要替换来源，应另开 PR 审核原始来源、规则语义与权限边界。
+
+### 管理员验收
+
+- 配置实际生效的 GitHub ruleset，让 `main` 要求 PR 和至少一名审批者，限制绕过，并在新提交后撤销过时的审批。仅启用经典分支保护不足以通过此处的规则集检查。
+- 配置 `rewrite-publications` 的规则集，禁止强推和删除，仅允许指定发布流程追加。必要时管理员可先创建指向受保护提交的空发布分支。操作员应核对规则绕过列表和 Actions 权限。当前开发凭据无法读取 Actions 管理权限，也无法证明受限 GITHUB_TOKEN 能向该分支推送。
+- 配置 `rewrite-release` 环境，限制只能从受保护 `main` 部署，启用必需审核者和禁止自审。用管理员凭据运行 `GITHUB_REPOSITORY=JachinGuan/QuantumultX-Personal python3 scripts/release_preflight.py admin` 检查生效规则和环境配置。发布任务还会检查本次运行的独立环境批准记录。API 拒绝读取时会停止。
 
 ### 部署和回滚
 
 1. 在 GitHub Actions 手动运行 **Controlled Rewrite release**，选择受保护的 `main`，输入完整版本 ID，并勾选发布确认。发布任务读取该次运行固定提交中的批准锁及审核记录，重新验证候选清单和每个文件哈希，使用同一份已验证字节构建产物。
-2. 发布任务将产物追加到 `rewrite-publications`，输出带提交 SHA 与版本 ID 的不可变 URL。以运行摘要中的 URL 为准，不使用分支名作为订阅地址。重复版本会失败。PR 检查只运行测试，没有写权限。监控工作流保持原权限。
+2. 发布任务将产物追加到 `rewrite-publications`，从带提交 SHA 与版本 ID 的不可变 URL 重新下载并比对字节，验证后输出链接。以运行摘要中的 URL 为准，不使用分支名作为订阅地址。重复版本会失败。PR 检查只运行测试，没有写权限。监控工作流保持原权限。
 3. 在单独的测试配置中用真实 Quantumult X 验证规则、MITM 行为和重定向后，再决定是否人工采用。默认订阅和现有链接不会变动。
 4. 回滚时，在本地检出旧发布提交。用当前受信任的仓库检出运行 `python3 scripts/publish_rewrite.py verify-rollback <旧版本> --output /path/to/old-checkout/published`。校验匹配当前保留的历史审核记录、完整旧快照、旧发布凭据及产物。通过后复用原先的 SHA 固定 URL。回滚不覆盖旧文件，也不自动变更客户端。
 
 ### 失败恢复
 
 - 缺失快照、哈希不一致、语法拒绝或批准不匹配时，停止发布并重新从可验证的候选开始审查。切勿修改旧记录来匹配新字节。
-- 若 Git 推送失败，先检查远程发布分支。已有版本应核对该次提交和凭据，并使用原不可变 URL。远程没有该版本时可重新派发批准过的版本；遇到并发提交也无需强推。
+- 若 Git 推送或推送后的 URL 验证失败，先检查远程发布分支。已有版本应核对该次提交和凭据，并使用原不可变 URL。远程没有该版本时可重新派发批准过的版本；遇到并发提交也无需强推。
 - 只读预览和本地测试使用临时 Fixture，永远不向发布分支写入。真实发布权限、环境审核及客户端兼容性需要管理员和审查者在部署时确认。

@@ -1,0 +1,38 @@
+name: Prepare GoogleRedirect approval materials
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'JachinGuan/QuantumultX-Personal'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prepare and commit review material
+        id: materials
+        run: |
+          set -euo pipefail
+          version="$(python3 scripts/prepare_rewrite.py)"
+          [[ "$version" =~ ^[a-f0-9]{64}$ ]]
+          git add -- "release-inputs/GoogleRedirect/$version" "manifests/approvals/GoogleRedirect/$version.json"
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Prepare GoogleRedirect review $version"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Push proposal and provide browser link
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.materials.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[a-f0-9]{64}$ ]]
+          branch="review/google-redirect-${VERSION:0:16}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git -c credential.helper='!gh auth git-credential' push origin "HEAD:refs/heads/$branch"
+          printf '[Open approval proposal](https://github.com/%s/compare/main...%s?expand=1)\n' "$GITHUB_REPOSITORY" "$branch" >> "$GITHUB_STEP_SUMMARY"
