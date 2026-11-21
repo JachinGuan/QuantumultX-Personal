@@ -44,6 +44,24 @@ python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candi
 
 批准和正式发布应使用独立流程与权限，并验证清单、依赖闭包及每份对象哈希。发布器须按识别出的语法位置改写入口和传递依赖，使脚本引用指向不可变的受控版本。需保留 QX 指令、参数、顺序和重写语义，在真实 Quantumult X 客户端验证脚本动作、MITM、重定向和依赖加载。未知绑定存在或客户端兼容性未验证时，应继续冻结。当前版本不生成订阅、不改写 URL，也不部署候选或批准版本。
 
+## 模块级管理
+
+`upstream/sources.json` 定义上游下载地址和资源类型，`upstream/modules.json` 按模块 ID 记录管理状态。每个来源独立比较快照和依赖图。共享依赖可以复用一次下载结果，每个引用该依赖的入口仍分别保留变化记录。
+
+| 字段 | 含义 |
+| --- | --- |
+| `monitor_enabled` | 是否下载并监控该来源。暂停时保留 Issue 入口基线及历史依赖图。 |
+| `client_enabled` | 用户报告的 QX 本地开关，`null` 表示未知。开关记录需注明用户来源。仓库不会读取、同步或修改本地配置。 |
+| `managed` | 是否由仓库接管发布。还必须有经审查并已实现的专用发布校验策略。 |
+| `update_policy` | `review` 允许进入人工审核，`frozen` 禁止发布新版本。冻结不阻止监控或校验已保存的历史版本。 |
+| `risk_status` | `normal` 正常、`watch` 待观察、`compatibility_concern` 有兼容性疑虑。 |
+
+**高德去广告（AmapAds）**：用户报告无线 CarPlay 导航时曾偶发从路线导航退回巡航。用户已在 QX 停用该模块，停用后暂未复现。因问题偶发，因果尚未证实。仓库状态为继续监控、冻结更新、暂不接管。保持当前稳定配置。若日后决定排查，仅在停车或安全的独立测试条件下单独比较该模块的关闭状态和已核验版本，记录 QX、系统和应用版本及是否复现即可。勿收集或上传路线、定位、证书、私有订阅或含凭据的日志。若复现，关闭该模块或恢复先前已验证的独立链接；其余模块无需切换。
+
+- **新增或暂停监控**：在两个清单用同一个模块 ID 登记。仅监控时设 `managed: false`，客户端状态设 `null`，除非用户明确报告。暂停或移除时先将 `monitor_enabled` 设为 `false`；移除来源后保留登记及历史审批材料以便追溯。
+- **独立采用与冻结**：只有 ReleaseCheck 已有发布校验策略。其他模块在另行审核来源、许可、依赖闭包和兼容性后，才可添加专用策略并接管。受管模块分别批准固定版本与清单哈希，派发时填写单个模块 ID 与版本。流水线仅追加 `published/<模块>/<版本>/<模块>.conf`，发布 URL 还固定到 Git 提交。按模块各自作为 QX 的一个 Rewrite 远程项，使用原生开关独立启停。冻结时将该模块设为 `frozen`，已有链接仍可使用。
+- **独立回滚**：保留旧提交 URL 和审核快照，从受信任的仓库检出运行 `python3 scripts/publish_rewrite.py verify-rollback <旧版本> --module <模块> --output /path/to/old-checkout/published`。校验后仅在测试配置中替换该模块原链接。没有可信旧版时，可在 QX 中只关闭该模块。
+
 ## ReleaseCheck 受控发布试点
 
 仓库没有客户端的启用列表。现有监控来源不等于客户端已启用规则。2026-11-21 实测，GoogleRedirect 原文件 HTTP 200、无跳转、`text/plain`，SHA-256 为 `f759ce585a197719178cfa5fe2b48c105696c3d2cb1214d09522181233105f97`。它声明 MITM `www.google.cn` 并尝试 302 到 Google，但正则的 `www.` 未转义，也缺少主机边界。GitHub 许可证接口返回 404，无法确认再托管许可，因此继续原样监控。
@@ -54,7 +72,7 @@ python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candi
 
 1. 功能 PR 审阅完成并合并后，在 **Actions → Prepare ReleaseCheck review materials → Run workflow** 选择 `main`。打开运行摘要查看静态风险，`release-check-review` 提供候选字节和审核记录。准备流程只有仓库读取权限。
 2. 将运行链接交给有推送权限的助手。助手可通过 `gh run download <运行 ID> -n release-check-review` 取得材料。如果下载存储被代理拦截，助手可从同次运行日志里的 `QX_REVIEW_BUNDLE` 取得相同材料并重新校验。核对后另开批准 PR，只提交 `release-inputs/` 和历史审核记录。iPad 无需上传。你核对差异后，在该批准 PR 分支用 GitHub 网页编辑 `manifests/approved.json`，填入 `ReleaseCheck` 的 `version` 和 `manifest_sha256`。确认后由你手动合并批准 PR。
-3. 在 **Actions → Controlled Rewrite release → Run workflow** 选择 `main`，填写已批准的完整版本 ID 并确认。只有所有者能派发或重跑。发布会校验批准锁、候选路径、清单、文件哈希和固定来源字节。它只向发布分支追加版本，拒绝覆盖。推送后从固定发布提交的 raw URL 下载并比对，成功后摘要才显示可用链接。
+3. 在 **Actions → Controlled Rewrite release → Run workflow** 选择 `main`，填写模块 ID（当前为 `ReleaseCheck`）和已批准的完整版本 ID 并确认。只有所有者能派发或重跑。发布会校验批准锁、候选路径、清单、文件哈希和固定来源字节。它只向发布分支追加版本，拒绝覆盖。推送后从固定发布提交的 raw URL 下载并比对，成功后摘要才显示可用链接。
 
 ### 个人仓库权限
 

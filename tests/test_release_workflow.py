@@ -38,6 +38,9 @@ class WorkflowTests(unittest.TestCase):
             git("config", "user.email", "fixture@example.invalid")
             git("remote", "add", "origin", str(bare))
             shutil.copytree(SCRIPTS, repo / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+            registry = repo / "upstream/modules.json"
+            registry.parent.mkdir()
+            shutil.copyfile(SCRIPTS.parent / "upstream/modules.json", registry)
             lock = repo / "manifests/approved.json"
             lock.parent.mkdir()
             lock.write_text("{}\n")
@@ -69,8 +72,19 @@ class WorkflowTests(unittest.TestCase):
                 git("add", "manifests/approved.json")
                 git("commit", "-m", "Fixture human approval")
                 worktree = root / f"release-{i}"
-                action("build", version, worktree)
-                action("push", version, worktree)
+                if i == 0:
+                    original_registry = registry.read_text()
+                    modules = json.loads(original_registry)
+                    modules[release.ENTRY]["update_policy"] = "frozen"
+                    registry.write_text(json.dumps(modules))
+                    blocked = action("build", version, root / "frozen", release.ENTRY, check=False)
+                    self.assertNotEqual(blocked.returncode, 0)
+                    unmanaged = action("build", version, root / "unmanaged", "AmapAds", check=False)
+                    self.assertNotEqual(unmanaged.returncode, 0)
+                    registry.write_text(original_registry)
+                module_args = () if i == 0 else (release.ENTRY,)
+                action("build", version, worktree, *module_args)
+                action("push", version, worktree, *module_args)
                 commit = git("--git-dir", str(bare), "rev-parse", "refs/heads/rewrite-publications").stdout.decode().strip()
                 path = f"published/ReleaseCheck/{version}/{release.FILE}"
                 published.append((commit, path, data))
@@ -79,8 +93,26 @@ class WorkflowTests(unittest.TestCase):
                 duplicate = action("build", version, root / f"duplicate-{i}", check=False)
                 self.assertNotEqual(duplicate.returncode, 0)
             first = published[0][1].split("/")[2]
-            reviewed = release.load_snapshot(repo / "release-inputs", first)
-            release.verify_rollback(reviewed, repo / "manifests", root / "release-1/published")
+            modules = json.loads(registry.read_text())
+            modules[release.ENTRY]["update_policy"] = "frozen"
+            registry.write_text(json.dumps(modules))
+            subprocess.run(
+                ["python3", "scripts/publish_rewrite.py", "verify-rollback", first,
+                 "--module", release.ENTRY, "--output", str(root / "release-1/published")],
+                cwd=repo, check=True, capture_output=True,
+            )
+
+    def test_existing_releasecheck_snapshot_reviews_identically_with_legacy_cli(self):
+        repo = SCRIPTS.parent
+        version = json.loads((repo / "manifests/approved.json").read_text())[release.ENTRY]["version"]
+        expected = json.loads((repo / f"manifests/approvals/{release.ENTRY}/{version}.json").read_text())
+        for options in ([], ["--module", release.ENTRY]):
+            with self.subTest(options=options):
+                result = subprocess.run(
+                    ["python3", "scripts/publish_rewrite.py", "review", version, *options],
+                    cwd=repo, check=True, capture_output=True,
+                )
+                self.assertEqual(json.loads(result.stdout), expected)
 
     def test_preparation_rejects_current_upstream_shape_without_writing_material(self):
         raw = br"""hostname = www.google.cn
