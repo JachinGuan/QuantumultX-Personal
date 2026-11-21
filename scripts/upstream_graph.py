@@ -40,6 +40,17 @@ def packed(value):
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
 
 
+def snapshot_version(root, files, relations, issues):
+    """Bind a snapshot to its resource closure, independently of observation time."""
+    identity = {
+        "root": root,
+        "files": {url: [node["sha256"], node["final_url"], node["media_type"]] for url, node in files.items()},
+        "relations": relations,
+        "issues": issues,
+    }
+    return sha(packed(identity))
+
+
 @dataclass
 class Resource:
     data: bytes
@@ -181,15 +192,9 @@ class GraphMonitor:
         mitm = root.profile.get("mitm", [])
         if "mitm" in root.profile.get("truncated", []):
             issues.append((source["url"], 0, "MITM 范围列表达到上限"))
-        # Include incomplete edges and checked content in the identity, but exclude timestamps.
-        identity = {
-            "root": source["url"],
-            "files": {url: [node["sha256"], node["final_url"], node["media_type"]] for url, node in nodes.items()},
-            "relations": relations,
-            "issues": issues,
-        }
         return {
-            "entry": name, "version": sha(packed(identity)), "checked_at": self.checked,
+            "entry": name, "version": snapshot_version(source["url"], nodes, relations, issues),
+            "checked_at": self.checked,
             "root": source["url"], "files": nodes, "dependencies": relations, "issues": issues,
             "mitm": mitm, "graph_complete": not issues, "fetch_failed": failed,
             "review_status": "candidate", "frozen": True, "approval_eligible": not issues,

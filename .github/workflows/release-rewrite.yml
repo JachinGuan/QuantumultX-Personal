@@ -1,0 +1,73 @@
+name: Controlled Rewrite release
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Reviewed GoogleRedirect snapshot SHA-256 version ID
+        required: true
+        type: string
+      confirm_release:
+        description: Confirm publication of this reviewed version
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -v
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'JachinGuan/QuantumultX-Personal' && inputs.confirm_release
+    environment: rewrite-release
+    concurrency:
+      group: google-redirect-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Validate version and prepare release commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[a-f0-9]{64}$ ]]
+          branch=refs/heads/rewrite-publications
+          base="$(git rev-parse HEAD)"
+          refs="$(git ls-remote origin "$branch")"
+          if [[ -n "$refs" ]]; then
+            git fetch --no-tags --depth=1 origin "$branch"
+            base="$(git rev-parse FETCH_HEAD)"
+          fi
+          release_tree="$RUNNER_TEMP/qx-publication"
+          git worktree add --detach "$release_tree" "$base"
+          mkdir -p "$release_tree/published"
+          python3 scripts/publish_rewrite.py publish "$VERSION" --output "$release_tree/published"
+          git -C "$release_tree" add -- "published/GoogleRedirect/$VERSION"
+          git -C "$release_tree" -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Publish GoogleRedirect $VERSION"
+      - name: Append release and record immutable URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          release_tree="$RUNNER_TEMP/qx-publication"
+          git -C "$release_tree" -c credential.helper='!gh auth git-credential' push origin HEAD:refs/heads/rewrite-publications
+          revision="$(git -C "$release_tree" rev-parse HEAD)"
+          printf 'Immutable URL: %s\n' "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$revision/published/GoogleRedirect/$VERSION/GoogleRedirect.conf" >> "$GITHUB_STEP_SUMMARY"

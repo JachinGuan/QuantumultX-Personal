@@ -43,3 +43,33 @@ python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candi
 ### 后续受控发布
 
 批准和正式发布应使用独立流程与权限，并验证清单、依赖闭包及每份对象哈希。发布器须按识别出的语法位置改写入口和传递依赖，使脚本引用指向不可变的受控版本。需保留 QX 指令、参数、顺序和重写语义，在真实 Quantumult X 客户端验证脚本动作、MITM、重定向和依赖加载。未知绑定存在或客户端兼容性未验证时，应继续冻结。当前版本不生成订阅、不改写 URL，也不部署候选或批准版本。
+
+## GoogleRedirect 受控发布试点
+
+当前上游的正则包含未转义的 `www.`，且未限定主机结束位置，可能匹配形似 Google 的其他域名。发布器会拒绝当前快照。请等待上游提供符合下面限定语法的版本，并在审核时核对原始字节。工具不生成替代规则或改写下载内容。
+
+试点只接受下列两条有效指令，可带空行和以 `#` 开头的 ASCII 注释。地址必须是 HTTPS，且主机必须恰好为 `www.google.cn`。任何其他动作、附加配置、脚本引用、额外对象、重定向来源、不完整图或未知依赖均被拒绝。此校验限定语法和范围，真实客户端行为仍需验证。
+
+```text
+hostname = www.google.cn
+^https:\/\/www\.google\.cn(?:[/?#]|$) url 302 https://www.google.com
+```
+
+### 候选、审核与批准
+
+1. 用 `python3 scripts/check_upstream.py --dry-run --candidate-dir candidates` 获取候选。找到 `candidates/GoogleRedirect/<版本>`，并以 `python3 scripts/publish_rewrite.py review <版本> --input-dir candidates` 校验。命令仅输出审核记录，供人工核对内容、完整闭包和哈希。
+2. 在独立的批准 PR 中，将整份候选快照复制到 `release-inputs/GoogleRedirect/<版本>/`。保留原始 `manifest.json` 与 `objects/` 的字节。将审核命令输出放入 `manifests/approvals/GoogleRedirect/<版本>.json`，再将 `manifests/approved.json` 的 `GoogleRedirect` 指向该版本。审核者应独立检查快照和审核记录，确认目标域名、规则行为、文件与清单哈希，并人工合并批准 PR。保留旧快照及历史批准记录。
+3. 用 GitHub 保护 `main`，要求批准 PR 独立审查，并限制直接推送。先配置 `rewrite-release` 环境，仅允许受保护的 `main` 发布，启用必需审核者与禁止自审（如仓库方案支持）。工作流检查分支保护状态；必需审核者由仓库管理员配置。保护 `rewrite-publications` 分支，禁止强推、删除和旁路写入，允许指定的发布流程推送。
+
+### 部署和回滚
+
+1. 在 GitHub Actions 手动运行 **Controlled Rewrite release**，选择受保护的 `main`，输入完整版本 ID，并勾选发布确认。发布任务读取该次运行固定提交中的批准锁及审核记录，重新验证候选清单和每个文件哈希，使用同一份已验证字节构建产物。
+2. 发布任务将产物追加到 `rewrite-publications`，输出带提交 SHA 与版本 ID 的不可变 URL。以运行摘要中的 URL 为准，不使用分支名作为订阅地址。重复版本会失败。PR 检查只运行测试，没有写权限。监控工作流保持原权限。
+3. 在单独的测试配置中用真实 Quantumult X 验证规则、MITM 行为和重定向后，再决定是否人工采用。默认订阅和现有链接不会变动。
+4. 回滚时，在本地检出旧发布提交。用当前受信任的仓库检出运行 `python3 scripts/publish_rewrite.py verify-rollback <旧版本> --output /path/to/old-checkout/published`。校验匹配当前保留的历史审核记录、完整旧快照、旧发布凭据及产物。通过后复用原先的 SHA 固定 URL。回滚不覆盖旧文件，也不自动变更客户端。
+
+### 失败恢复
+
+- 缺失快照、哈希不一致、语法拒绝或批准不匹配时，停止发布并重新从可验证的候选开始审查。切勿修改旧记录来匹配新字节。
+- 若 Git 推送失败，先检查远程发布分支。已有版本应核对该次提交和凭据，并使用原不可变 URL。远程没有该版本时可重新派发批准过的版本；遇到并发提交也无需强推。
+- 只读预览和本地测试使用临时 Fixture，永远不向发布分支写入。真实发布权限、环境审核及客户端兼容性需要管理员和审查者在部署时确认。
