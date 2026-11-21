@@ -15,9 +15,10 @@ import zlib
 from urllib.parse import urlsplit
 
 if __package__:
-    from . import upstream_graph as graph
+    from . import upstream_alerts as alerts, upstream_graph as graph
     from .module_registry import load_modules, select_sources
 else:
+    import upstream_alerts as alerts
     import upstream_graph as graph
     from module_registry import load_modules, select_sources
 
@@ -366,7 +367,8 @@ def render(sources, previous, observations):
     return report, body, bool(changes)
 
 
-def graph_report(sources, previous, previous_graph, approved, export=None, *, paused=()):
+def graph_report(sources, previous, previous_graph, approved, export=None, *, paused=(),
+                 modules=None, prior_alerts=None):
     monitor = graph.GraphMonitor(validate, profile, InvalidContent)
     roots = {name: monitor.load(source["url"], source["kind"], source)
              for name, source in sources.items()}
@@ -383,6 +385,12 @@ def graph_report(sources, previous, previous_graph, approved, export=None, *, pa
             monitor.export(export, snapshots[name])
     current, _, _, _, _ = summarize(sources, previous, observations)
     next_graph, blocks = graph.report_blocks(sources, snapshots, previous_graph, previous, approved)
+    if modules is None:
+        modules = {name: {"monitor_enabled": name in sources} for name in (*sources, *paused)}
+    rows, notices, next_alerts = alerts.render(
+        modules, observations, snapshots, previous, previous_graph, prior_alerts or {},
+        {block[0].removeprefix("#### ") for block in blocks},
+    )
     failures = []
     for name, observation in observations.items():
         if observation.error:
@@ -407,22 +415,23 @@ def graph_report(sources, previous, previous_graph, approved, export=None, *, pa
         "### 下载或验证失败", *(failures or ["- 无"]), "",
         "### 重复哈希（相同字节，需要排查响应来源）",
         *((line.replace(" shared by ", " · 同一哈希出现在 ") for line in repeated + historical) if repeated or historical else ["- 无"]), "",
-        "### 入口与依赖变化",
+        "### 模块状态", *rows, "",
+        "### 入口与依赖变化（对照最后完整基线）",
     ]
-    # Keep the full delta in timeline comments; leave room for the durable state.
+    # The Issue carries routine deltas; only alert transitions enter the timeline.
     details = "\n".join("\n".join(block) for block in blocks)
     summary = "\n".join(summary)
     state = json.dumps(current, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c")
-    tail = f"\n\n{BEGIN}\n{state}\n{END}\n{graph.serialize_graph(next_graph)}"
+    tail = f"\n\n{BEGIN}\n{state}\n{END}\n{graph.serialize_graph(next_graph)}\n{alerts.serialize(next_alerts)}"
     comments = []
-    if details:
-        page = f"### 依赖变更 · {monitor.checked}\n"
+    if notices:
+        page = f"### 模块提醒 · {monitor.checked}\n"
         page_size = len(page.encode())
-        for line in details.splitlines():
+        for line in notices:
             line_size = len(line.encode()) + 1
             if page_size + line_size > 24000:
                 comments.append(page)
-                page = f"### 依赖变更（续） · {monitor.checked}\n"
+                page = f"### 模块提醒（续） · {monitor.checked}\n"
                 page_size = len(page.encode())
             page += line + "\n"
             page_size += line_size
@@ -433,7 +442,7 @@ def graph_report(sources, previous, previous_graph, approved, export=None, *, pa
     brief = details or "- 无候选变化。"
     if len(brief.encode()) > room:
         brief = brief.encode()[:room - 100].decode(errors="ignore").rsplit("\n", 1)[0]
-        brief += "\n- 其余变化见本次 Issue 评论。"
+        brief += "\n- 本次变化详情因 Issue 容量仅显示部分，可查看只读运行报告。"
     return summary + "\n" + (details or brief), summary + "\n" + brief + tail, comments
 
 
@@ -546,15 +555,18 @@ def main():
             raise ValueError("Issue #1 的基线为空")
     previous = read_state(issue_body) if issue_body else {}
     previous_graph = graph.read_graph(issue_body)
+    prior_alerts = alerts.migrate(issue_body, previous, previous_graph)
     if not args.dry_run:
         deliver_outbox(request, issue_body)
     approved_path = args.approved_lock
     default_lock = ROOT / "manifests/approved.json"
     if approved_path is None and default_lock.is_file():
         approved_path = default_lock
-    active, paused = select_sources(sources, load_modules(ROOT / "upstream/modules.json"))
+    modules = load_modules(ROOT / "upstream/modules.json")
+    active, paused = select_sources(sources, modules)
     report, body, comments = graph_report(
-        active, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir, paused=paused
+        active, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir,
+        paused=paused, modules=modules, prior_alerts=prior_alerts,
     )
     if not args.dry_run:
         publish_issue(request, body, comments)

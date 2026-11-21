@@ -88,7 +88,7 @@ class ModuleRegistryTests(unittest.TestCase):
 
             files[dependency] = b"const value = 2;"
             report, updated, comments = run(paused)
-            self.assertTrue(comments)
+            self.assertFalse(comments)
             self.assertNotIn("首次建立依赖基线", report)
             self.assertIn(graph.sha(original), report)
             self.assertIn(graph.sha(files[dependency]), report)
