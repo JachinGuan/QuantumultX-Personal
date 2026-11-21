@@ -44,39 +44,26 @@ python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candi
 
 批准和正式发布应使用独立流程与权限，并验证清单、依赖闭包及每份对象哈希。发布器须按识别出的语法位置改写入口和传递依赖，使脚本引用指向不可变的受控版本。需保留 QX 指令、参数、顺序和重写语义，在真实 Quantumult X 客户端验证脚本动作、MITM、重定向和依赖加载。未知绑定存在或客户端兼容性未验证时，应继续冻结。当前版本不生成订阅、不改写 URL，也不部署候选或批准版本。
 
-## GoogleRedirect 受控发布试点
+## ReleaseCheck 受控发布试点
 
-当前上游的正则包含未转义的 `www.`，且未限定主机结束位置，可能匹配形似 Google 的其他域名。发布器会拒绝当前快照。请等待上游提供符合下面限定语法的版本，并在审核时核对原始字节。工具不生成替代规则或改写下载内容。
+仓库没有客户端的启用列表。现有监控来源不等于客户端已启用规则。2026-11-21 实测，GoogleRedirect 原文件 HTTP 200、无跳转、`text/plain`，SHA-256 为 `f759ce585a197719178cfa5fe2b48c105696c3d2cb1214d09522181233105f97`。它声明 MITM `www.google.cn` 并尝试 302 到 Google，但正则的 `www.` 未转义，也缺少主机边界。GitHub 许可证接口返回 404，无法确认再托管许可，因此继续原样监控。
 
-试点只接受下列两条有效指令，可带空行和以 `#` 开头的 ASCII 注释。地址必须是 HTTPS，且主机必须恰好为 `www.google.cn`。任何其他动作、附加配置、脚本引用、额外对象、重定向来源、不完整图或未知依赖均被拒绝。此校验限定语法和范围，真实客户端行为仍需验证。
+`pilot/ReleaseCheck.conf` 是仓库自有诊断规则，适用本仓库 Apache-2.0 许可证。它仅匹配 `https://example.com/qx-release-check` 诊断路径，返回 302 至 `https://example.org/`。MITM 仅为 `example.com`，没有 JavaScript 或动态依赖。请在独立 QX 测试配置中验证。候选从固定 Git 提交的原始 HTTPS 地址下载，拒绝跳转、字节不符、附加规则和不完整依赖图。它与 GoogleRedirect 是不同规则。
 
-```text
-hostname = www.google.cn
-^https:\/\/www\.google\.cn(?:[/?#]|$) url 302 https://www.google.com
-```
+### iPad 操作
 
-### 候选、审核与批准
+1. 功能 PR 审阅完成并合并后，在 **Actions → Prepare ReleaseCheck review materials → Run workflow** 选择 `main`。打开运行摘要查看静态风险，`release-check-review` 提供候选字节和审核记录。准备流程只有仓库读取权限。
+2. 将运行链接交给有推送权限的助手。助手可通过 `gh run download <运行 ID> -n release-check-review` 取得材料，核对后另开批准 PR，只提交 `release-inputs/` 和历史审核记录。iPad 无需上传。你核对差异后，在该批准 PR 分支用 GitHub 网页编辑 `manifests/approved.json`，填入 `ReleaseCheck` 的 `version` 和 `manifest_sha256`。确认后由你手动合并批准 PR。
+3. 在 **Actions → Controlled Rewrite release → Run workflow** 选择 `main`，填写已批准的完整版本 ID 并确认。只有所有者能派发或重跑。发布会校验批准锁、候选路径、清单、文件哈希和固定来源字节。它只向发布分支追加版本，拒绝覆盖。推送后从固定发布提交的 raw URL 下载并比对，成功后摘要才显示可用链接。
 
-1. 在 GitHub Actions 手动运行 **Prepare GoogleRedirect approval materials**，选择受保护的 `main`。任务从固定原始地址重新下载，使用与发布器相同的策略校验候选。通过后将原字节和审核记录写入独立的 `review/google-redirect-*` 提案分支，运行摘要提供创建批准 PR 的链接。准备任务不修改 `manifests/approved.json`。
-2. 用 iPad 浏览器打开提案链接。仓库所有者核对 Actions 摘要里的静态检查、原始文件、完整依赖图和审核记录。确认后，在提案分支上用 GitHub 网页编辑 `manifests/approved.json`，从同一审核记录填写 `GoogleRedirect` 的 `version` 和 `manifest_sha256`。检查最终差异后手动合并批准 PR。无需上传文件。保留旧快照和审核记录。
-3. 当前试点仅用 Fixture 验证。现行上游会在第 1 步被拒绝，因而不会生成提案分支。若要替换来源，应另开 PR 审核原始来源、规则语义与权限边界。
+### 个人仓库权限
 
-### 单人维护与管理员验收
+默认要求生效的 rulesets。`main` 通过 PR 更新，审批人数可设为 0。为 `main` 和 `rewrite-publications` 禁止强推及删除。2026-11-21 查询时，`main` 未受保护，有效规则集为空，发布分支未查到；Actions 管理权限接口对当前凭据返回 403。
 
-- 人工批准和发布是同一维护者执行的两个独立动作。准备任务生成静态风险摘要和审核材料，只有维护者手动提交精确版本及清单 SHA-256 才形成发布所需的批准。发布派发的确认框只确认执行。监控和准备流程无法写入批准锁。
-- 配置生效的 GitHub ruleset，要求 `main` 经 PR 更新，并禁止强推、删除和不必要的绕过。所需审批人数设为 **0**。为 `rewrite-publications` 禁止强推和删除，仅允许指定发布流程追加。管理员应核对绕过列表和 Actions 写权限。
-- 用管理员凭据运行 `GITHUB_REPOSITORY=JachinGuan/QuantumultX-Personal python3 scripts/release_preflight.py admin` 检查生效规则。发布任务还会验证原始派发者和重跑发起者均为仓库所有者。无需 GitHub Environment 独立审核。若当前方案、权限或仓库配置无法提供所需规则集，保留只读试点，发布流程会拒绝继续。
-- 该模型防止上游变动、普通分支修改或误操作直接发布。它信任所有者账号，以及通过仓库规则进入 `main` 的代码和批准记录。所有者凭据失陷或规则被有权限的人绕过不在保障范围内。同一账号的人工批准不等于独立审查，AI 和静态风险分析均不能保证安全。
+个人公开仓库确实只有你能写入时，可在 **Settings → Secrets and variables → Actions → Variables → New repository variable** 显式设置 `QX_RELEASE_POLICY=personal-owner`。该模式仍要求所有者派发、精确批准、验证来源以及非强制追加推送，但没有服务端防改历史的保障。若有其他写入者，请使用 rulesets。GitHub 拒绝写入时工作流会失败，不会更换令牌或跳过校验。所有者账号失陷不在此模型的保障范围内。
 
-### 部署和回滚
+### 验证与回滚
 
-1. 在 GitHub Actions 手动运行 **Controlled Rewrite release**，选择受保护的 `main`，输入完整版本 ID，并勾选发布确认。发布任务读取该次运行固定提交中的批准锁及审核记录，重新验证候选清单和每个文件哈希，使用同一份已验证字节构建产物。
-2. 发布任务将产物追加到 `rewrite-publications`，从带提交 SHA 与版本 ID 的不可变 URL 重新下载并比对字节，验证后输出链接。以运行摘要中的 URL 为准，不使用分支名作为订阅地址。重复版本会失败。PR 检查只运行测试，没有写权限。监控工作流保持原权限。
-3. 在单独的测试配置中用真实 Quantumult X 验证规则、MITM 行为和重定向后，再决定是否人工采用。默认订阅和现有链接不会变动。
-4. 回滚时，在本地检出旧发布提交。用当前受信任的仓库检出运行 `python3 scripts/publish_rewrite.py verify-rollback <旧版本> --output /path/to/old-checkout/published`。校验匹配当前保留的历史审核记录、完整旧快照、旧发布凭据及产物。通过后复用原先的 SHA 固定 URL。回滚不覆盖旧文件，也不自动变更客户端。
+真实 runner 从 PR 提交下载原始诊断规则，校验与 checkout 字节一致并保存只读审核材料。测试在 runner 的本地临时 Git 远端模拟人工批准、追加、重复发布拒绝、按 SHA 取回和回滚。真实发布分支写权限、发布后的 raw URL 和 QX 客户端仍需首次手动发布时验证。
 
-### 失败恢复
-
-- 缺失快照、哈希不一致、语法拒绝或批准不匹配时，停止发布并重新从可验证的候选开始审查。切勿修改旧记录来匹配新字节。
-- 若 Git 推送或推送后的 URL 验证失败，先检查远程发布分支。已有版本应核对该次提交和凭据，并使用原不可变 URL。远程没有该版本时可重新派发批准过的版本；遇到并发提交也无需强推。
-- 只读预览和本地测试使用临时 Fixture，永远不向发布分支写入。真实发布权限、规则集及客户端兼容性需要管理员和审查者在部署时确认。
+回滚时保留旧快照、审核记录和发布提交。检出旧提交后可运行 `python3 scripts/publish_rewrite.py verify-rollback <旧版本> --output /path/to/old-checkout/published`，核验通过后复用原 SHA 固定链接。推送失败或 raw 校验失败时，先检查远程是否已有该版本；已有则核对回执及内容，禁止重写。静态检查不保证安全或客户端兼容。

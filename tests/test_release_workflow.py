@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ from scripts.upstream_graph import approved_versions
 from scripts.upstream_transport import Download
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-SAFE = f"hostname = www.google.cn\n{release.RULE}\n".encode()
+SAFE = f"hostname = example.com\n{release.RULE}\n".encode()
 
 
 class WorkflowTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class WorkflowTests(unittest.TestCase):
                                       cwd=repo, capture_output=True, check=check)
 
             def prepare(data):
-                return prepare_rewrite.prepare(repo, lambda url, *args: Download(data, url, "text/plain"))
+                return prepare_rewrite.prepare(repo, "a" * 40, lambda url, *args: Download(data, url, "text/plain"))
 
             git("init", "--bare", str(bare))
             git("init", "-b", "main")
@@ -46,7 +47,17 @@ class WorkflowTests(unittest.TestCase):
             published = []
             for i, data in enumerate((SAFE, SAFE + b"# second fixture\n")):
                 previous_lock = lock.read_bytes()
-                version = prepare(data)
+                material = os.environ.get("QX_TEST_MATERIAL") if i == 0 else None
+                if material:
+                    version = os.environ["QX_TEST_VERSION"]
+                    for name in ("release-inputs", "manifests/approvals"):
+                        shutil.copytree(Path(material) / name, repo / name)
+                    reviewed = release.load_snapshot(repo / "release-inputs", version)
+                    data = reviewed.data
+                    self.assertEqual(data, (SCRIPTS.parent / release.PILOT).read_bytes())
+                    print("Live downloaded ReleaseCheck passed the offline Git publication and rollback simulation input checks.")
+                else:
+                    version = prepare(data)
                 self.assertEqual(lock.read_bytes(), previous_lock)
                 git("add", "release-inputs", "manifests/approvals")
                 git("commit", "-m", "Prepared review proposal")
@@ -61,7 +72,7 @@ class WorkflowTests(unittest.TestCase):
                 action("build", version, worktree)
                 action("push", version, worktree)
                 commit = git("--git-dir", str(bare), "rev-parse", "refs/heads/rewrite-publications").stdout.decode().strip()
-                path = f"published/GoogleRedirect/{version}/{release.FILE}"
+                path = f"published/ReleaseCheck/{version}/{release.FILE}"
                 published.append((commit, path, data))
                 for revision, saved_path, saved_data in published:
                     self.assertEqual(git("--git-dir", str(bare), "show", f"{revision}:{saved_path}").stdout, saved_data)
@@ -77,8 +88,8 @@ class WorkflowTests(unittest.TestCase):
 """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with self.assertRaisesRegex(ValueError, "主机边界"):
-                prepare_rewrite.prepare(root, lambda url, *args: Download(raw, url, "text/plain"))
+            with self.assertRaisesRegex(ValueError, "ReleaseCheck 候选"):
+                prepare_rewrite.prepare(root, "a" * 40, lambda url, *args: Download(raw, url, "text/plain"))
             self.assertEqual(list(root.iterdir()), [])
 
 
@@ -99,3 +110,12 @@ class PreflightTests(unittest.TestCase):
                        ("owner", "bot[bot]", "owner"), ("", "", "")):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 release_preflight.check_dispatcher(*values)
+
+    def test_personal_policy_requires_explicit_opt_in_and_public_user_owned_repo(self):
+        def public(_):
+            return {"private": False, "owner": {"type": "User"}}
+
+        self.assertIn("已显式启用", release_preflight.check_policy("personal-owner", public))
+        for policy, reader in (("", lambda _: []), ("typo", public), ("personal-owner", lambda _: {"private": True})):
+            with self.assertRaises(ValueError):
+                release_preflight.check_policy(policy, reader)

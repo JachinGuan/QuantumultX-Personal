@@ -9,7 +9,8 @@ from scripts import publish_rewrite as release
 from scripts.upstream_graph import GraphMonitor
 from scripts.upstream_transport import Download, DownloadError
 
-SAFE = ("hostname = www.google.cn\n\n# Fixture\n" + release.RULE + "\n").encode()
+SOURCE = release.SOURCE_BASE + "a" * 40 + "/" + release.PILOT
+SAFE = ("hostname = example.com\n\n# Fixture\n" + release.RULE + "\n").encode()
 UNSAFE = br"""hostname = www.google.cn
 ^https?:\/\/(www.)?(g|google)\.cn url 302 https://www.google.com
 """
@@ -40,8 +41,8 @@ class ReleaseTests(unittest.TestCase):
             return Download(rule, url, "text/plain")
 
         graph = GraphMonitor(monitor.validate, monitor.profile, monitor.InvalidContent, fetch=fetch)
-        source = {"url": release.SOURCE, "kind": "rewrite"}
-        root = graph.load(release.SOURCE, "rewrite", source)
+        source = {"url": SOURCE, "kind": "rewrite"}
+        root = graph.load(SOURCE, "rewrite", source)
         if isinstance(root, str):
             return None
         snapshot = graph.walk(release.ENTRY, source, root)
@@ -122,8 +123,8 @@ class ReleaseTests(unittest.TestCase):
         for update in (
             lambda m: m.update(graph_complete=False),
             lambda m: m.update(issues=["unknown"]),
-            lambda m: m.update(dependencies=[{"from": release.SOURCE, "to": "https://example.test/x.js"}]),
-            lambda m: m["files"][release.SOURCE].update(final_url="http://example.test/conf"),
+            lambda m: m.update(dependencies=[{"from": SOURCE, "to": "https://example.test/x.js"}]),
+            lambda m: m["files"][SOURCE].update(final_url="http://example.test/conf"),
             lambda m: m.update(root="../../escape"),
         ):
             with self.subTest(update=update):
@@ -136,15 +137,15 @@ class ReleaseTests(unittest.TestCase):
         unsafe = (
             UNSAFE,
             SAFE + b"^https://x url script-response-body https://example.test/x.js\n",
-            SAFE.replace(b"https://www.google.com", b"http://www.google.com"),
-            SAFE.replace(b"www.google.com", b"www.google.com.evil.test"),
+            SAFE.replace(b"https://example.org/", b"http://example.org/"),
+            SAFE.replace(b"example.org", b"example.org.evil.test"),
             SAFE + b"[rewrite_local]\n",
         )
         for data in unsafe:
             with self.subTest(data=data), self.assertRaises(ValueError):
                 release.validate_rule(data)
         version = self.export(UNSAFE)
-        with self.assertRaisesRegex(ValueError, "主机边界"):
+        with self.assertRaisesRegex(ValueError, "ReleaseCheck 候选"):
             release.load_snapshot(self.inputs, version)
 
     def test_rejects_unsafe_version_and_symlinked_output(self):
@@ -160,6 +161,12 @@ class ReleaseTests(unittest.TestCase):
         before = list(self.inputs.glob("**/manifest.json"))
         self.assertIsNone(self.export(SAFE, DownloadError("timeout")))
         self.assertEqual(list(self.inputs.glob("**/manifest.json")), before)
+
+    def test_origin_must_match_pinned_url_and_exact_bytes(self):
+        release.verify_origin(self.reviewed, lambda url, *args: Download(SAFE, url, "text/plain"))
+        for data, url in ((SAFE + b"# extra", SOURCE), (SAFE, "https://elsewhere.example/a.conf")):
+            with self.assertRaisesRegex(ValueError, "来源字节"):
+                release.verify_origin(self.reviewed, lambda *args: Download(data, url, "text/plain"))
 
     def test_failed_staging_leaves_no_release(self):
         self.approve_fixture()

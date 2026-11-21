@@ -17,8 +17,8 @@ case "$action" in
     git worktree add --detach "$tree" "$base"
     mkdir -p "$tree/published"
     python3 scripts/publish_rewrite.py publish "$version" --output "$tree/published"
-    git -C "$tree" add -- "published/GoogleRedirect/$version"
-    git -C "$tree" -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Publish GoogleRedirect $version"
+    git -C "$tree" add -- "published/ReleaseCheck/$version"
+    git -C "$tree" -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "Publish ReleaseCheck $version"
     ;;
   push)
     git -C "$tree" -c credential.helper='!gh auth git-credential' push origin "HEAD:$branch"

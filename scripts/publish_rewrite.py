@@ -1,4 +1,4 @@
-"""Review or publish an explicitly approved, dependency-free GoogleRedirect snapshot."""
+"""Review or publish an explicitly approved, dependency-free ReleaseCheck snapshot."""
 
 import argparse
 from contextlib import contextmanager
@@ -8,19 +8,23 @@ import os
 from pathlib import Path
 import re
 import stat
+from time import monotonic
 
 if __package__:
     from .upstream_graph import packed, sha, snapshot_version
-    from .upstream_transport import MAX_BYTES, endpoint
+    from .upstream_transport import MAX_BYTES, download, endpoint
 else:
     from upstream_graph import packed, sha, snapshot_version
-    from upstream_transport import MAX_BYTES, endpoint
+    from upstream_transport import MAX_BYTES, download, endpoint
 
-ENTRY = "GoogleRedirect"
+ENTRY = "ReleaseCheck"
 HEX = re.compile(r"[a-f0-9]{64}")
-SOURCE = "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/Html/General.conf"
-RULE = r"^https:\/\/www\.google\.cn(?:[/?#]|$) url 302 https://www.google.com"
-FILE = "GoogleRedirect.conf"
+PILOT = "pilot/ReleaseCheck.conf"
+SOURCE_BASE = "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/"
+SOURCE_PATTERN = re.compile(re.escape(SOURCE_BASE) + r"[a-f0-9]{40}/" + re.escape(PILOT))
+MITM_HOST = "example.com"
+RULE = r"^https:\/\/example\.com/qx-release-check(?:[/?#]|$) url 302 https://example.org/"
+FILE = "ReleaseCheck.conf"
 METADATA_LIMIT = 128 * 1024
 
 
@@ -69,8 +73,8 @@ def validate_rule(data):
     if any((ord(char) < 32 and char not in "\n\t") or ord(char) > 126 for char in text):
         raise ValueError("试点仅接受 ASCII 规则与注释")
     lines = [line for line in text.split("\n") if line.strip() and not line.startswith("#")]
-    if lines != ["hostname = www.google.cn", RULE]:
-        raise ValueError("仅支持明确限制 www.google.cn 主机边界的单条 HTTPS 目标 302 规则")
+    if lines != [f"hostname = {MITM_HOST}", RULE]:
+        raise ValueError("仅支持明确限制 example.com 诊断路径的单条 HTTPS 目标 302 规则")
 
 
 def valid_version(version):
@@ -86,26 +90,28 @@ def load_snapshot(input_dir, version):
             raise ValueError("快照存在缺失或意外文件")
         raw = read_file(snapshot, "manifest.json", METADATA_LIMIT)
         manifest = parse_json(raw)
-        if (manifest.get("entry") != ENTRY or manifest.get("root") != SOURCE
+        source = manifest.get("root")
+        if (not isinstance(source, str) or not SOURCE_PATTERN.fullmatch(source)
+                or manifest.get("entry") != ENTRY
                 or manifest.get("version") != version or manifest.get("review_status") != "candidate"
                 or manifest.get("graph_complete") is not True or manifest.get("fetch_failed") is not False
                 or manifest.get("frozen") is not True or manifest.get("approval_eligible") is not True
                 or manifest.get("dependencies") != [] or manifest.get("issues") != []
-                or manifest.get("mitm") != ["www.google.cn"]):
-            raise ValueError("仅接受通过完整性检查且没有依赖的 GoogleRedirect 候选")
+                or manifest.get("mitm") != [MITM_HOST]):
+            raise ValueError("仅接受通过完整性检查且没有依赖的 ReleaseCheck 候选")
         files = manifest.get("files")
-        if not isinstance(files, dict) or set(files) != {SOURCE} or not isinstance(files[SOURCE], dict):
-            raise ValueError("依赖闭包必须恰好包含 GoogleRedirect 入口")
-        node = files[SOURCE]
+        if not isinstance(files, dict) or set(files) != {source} or not isinstance(files[source], dict):
+            raise ValueError("依赖闭包必须恰好包含 ReleaseCheck 入口")
+        node = files[source]
         digest = valid_version(node.get("sha256"))
-        endpoint(SOURCE)
-        if (node.get("original_url") != SOURCE or node.get("final_url") != SOURCE
+        endpoint(source)
+        if (node.get("original_url") != source or node.get("final_url") != source
                 or node.get("redirects") != [] or node.get("kind") != "rewrite"
                 or node.get("review_status") != "candidate"
                 or node.get("media_type") not in ("text/plain", "text/x-conf", "application/octet-stream",
                                                   "binary/octet-stream")):
             raise ValueError("快照源、跳转、资源类型或文件状态不符合发布策略")
-        if snapshot_version(SOURCE, files, [], []) != version:
+        if snapshot_version(source, files, [], []) != version:
             raise ValueError("版本 ID 与快照闭包不符")
         filename = digest + ".blob"
         with directory("objects", snapshot) as objects:
@@ -117,7 +123,7 @@ def load_snapshot(input_dir, version):
     validate_rule(data)
     # Only immutable bytes leave this function. Publication never opens the source again.
     return Snapshot(data, {"schema": 1, "entry": ENTRY, "version": version,
-                           "manifest_sha256": sha(raw), "files": {SOURCE: digest}})
+                           "manifest_sha256": sha(raw), "files": {source: digest}})
 
 
 def approval_binding(reviewed):
@@ -135,6 +141,13 @@ def check_approval(manifests, reviewed, *, require_active):
             record = parse_json(read_file(entry, version + ".json", METADATA_LIMIT))
     if packed(record) != packed(reviewed.review):
         raise ValueError("受审记录与快照清单或入口字节不一致")
+
+
+def verify_origin(reviewed, fetch=download):
+    source, = reviewed.review["files"]
+    response = fetch(source, {"url": source, "kind": "rewrite"}, monotonic() + 15, MAX_BYTES)
+    if response.final_url != source or response.redirects or response.data != reviewed.data:
+        raise ValueError("固定提交的来源字节或最终 URL 与受审快照不一致")
 
 
 def write_new(parent, name, data):
@@ -185,7 +198,7 @@ def verify_rollback(reviewed, manifests, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("review", "publish", "verify-rollback"))
+    parser.add_argument("action", choices=("review", "publish", "verify-origin", "verify-rollback"))
     parser.add_argument("version")
     parser.add_argument("--input-dir", type=Path, default=Path("release-inputs"))
     parser.add_argument("--manifests", type=Path, default=Path("manifests"))
@@ -197,6 +210,9 @@ def main():
             print(json.dumps(result.review, indent=2))
         elif args.action == "publish":
             publish(result, args.manifests, args.output)
+        elif args.action == "verify-origin":
+            check_approval(args.manifests, result, require_active=True)
+            verify_origin(result)
         else:
             verify_rollback(result, args.manifests, args.output)
     except (OSError, ValueError, RecursionError) as exc:

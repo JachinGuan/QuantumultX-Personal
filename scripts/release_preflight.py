@@ -8,7 +8,7 @@ import subprocess
 
 def api(path):
     return json.loads(subprocess.check_output(
-        ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/{path}"], text=True
+        ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}" + (f"/{path}" if path else "")], text=True
     ))
 
 
@@ -25,6 +25,18 @@ def check_dispatcher(owner, actor, triggering_actor):
         raise ValueError("只有仓库所有者可以派发或重跑发布")
 
 
+def check_policy(policy, read):
+    if policy == "personal-owner":
+        repo = read("")
+        if repo.get("private") is not False or repo.get("owner", {}).get("type") != "User":
+            raise ValueError("单人兼容模式仅适用于个人拥有的公开仓库")
+        return "已显式启用单人兼容模式；发布仍由所有者及精确批准锁控制"
+    if policy not in ("", "rulesets"):
+        raise ValueError("未知发布策略")
+    check_rules(read("rules/branches/main"), read("rules/branches/rewrite-publications"))
+    return "发布规则集检查通过"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("admin", "run"))
@@ -33,8 +45,7 @@ def main():
         check_dispatcher(*(os.environ.get(key, "") for key in (
             "GITHUB_REPOSITORY_OWNER", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"
         )))
-    check_rules(api("rules/branches/main"), api("rules/branches/rewrite-publications"))
-    print("发布前置条件检查通过")
+    print(check_policy(os.environ.get("QX_RELEASE_POLICY", ""), api))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
-"""Prepare GoogleRedirect review material without changing the active approval lock."""
+"""Prepare ReleaseCheck review material without changing the active approval lock."""
 
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
@@ -14,13 +15,16 @@ else:
     import upstream_graph as graph
 
 
-def prepare(root, fetch=graph.download):
+def prepare(root, revision, fetch=graph.download):
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("来源必须为完整 Git 提交 SHA")
+    url = f"{release.SOURCE_BASE}{revision}/{release.PILOT}"
     # Never stage bytes that fail the exact same validation used by the publisher.
     with tempfile.TemporaryDirectory() as scratch:
         candidates = Path(scratch)
         runner = graph.GraphMonitor(monitor.validate, monitor.profile, monitor.InvalidContent, fetch=fetch)
-        source = {"url": release.SOURCE, "kind": "rewrite"}
-        resource = runner.load(release.SOURCE, "rewrite", source)
+        source = {"url": url, "kind": "rewrite"}
+        resource = runner.load(url, "rewrite", source)
         if isinstance(resource, str):
             raise ValueError("上游下载或内容校验失败，未生成审核材料")
         snapshot = runner.walk(release.ENTRY, source, resource)
@@ -42,9 +46,11 @@ def prepare(root, fetch=graph.download):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument("revision")
+    parser.add_argument("--output", type=Path, default=Path.cwd())
+    args = parser.parse_args()
     try:
-        print(prepare(Path.cwd()))
+        print(prepare(args.output, args.revision))
     except (OSError, ValueError) as exc:
         parser.exit(1, f"准备审核材料失败 · {exc}\n")
 

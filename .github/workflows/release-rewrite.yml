@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Reviewed GoogleRedirect snapshot SHA-256 version ID
+        description: Reviewed ReleaseCheck snapshot SHA-256 version ID
         required: true
         type: string
       confirm_release:
@@ -29,9 +29,9 @@ jobs:
       - run: python3 -m unittest discover -s tests -v
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'JachinGuan/QuantumultX-Personal' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.confirm_release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'JachinGuan/QuantumultX-Personal' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.confirm_release
     concurrency:
-      group: google-redirect-publication
+      group: release-check-publication
       cancel-in-progress: false
     permissions:
       contents: write
@@ -44,11 +44,14 @@ jobs:
       - name: Verify rulesets and repository owner
         env:
           GH_TOKEN: ${{ github.token }}
+          QX_RELEASE_POLICY: ${{ vars.QX_RELEASE_POLICY }}
         run: python3 scripts/release_preflight.py run
       - name: Validate version and prepare release commit
         env:
           VERSION: ${{ inputs.version }}
-        run: bash scripts/release_git.sh build "$VERSION" "$RUNNER_TEMP/qx-publication"
+        run: |
+          python3 scripts/publish_rewrite.py verify-origin "$VERSION"
+          bash scripts/release_git.sh build "$VERSION" "$RUNNER_TEMP/qx-publication"
       - name: Append release and record immutable URL
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,7 +61,7 @@ jobs:
           release_tree="$RUNNER_TEMP/qx-publication"
           bash scripts/release_git.sh push "$VERSION" "$release_tree"
           revision="$(git -C "$release_tree" rev-parse HEAD)"
-          path="published/GoogleRedirect/$VERSION/GoogleRedirect.conf"
+          path="published/ReleaseCheck/$VERSION/ReleaseCheck.conf"
           url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$revision/$path"
           printf 'Publication commit: %s\n' "$revision" >> "$GITHUB_STEP_SUMMARY"
           curl --proto '=https' --fail --silent --show-error --retry 4 --retry-all-errors --max-time 8 --output "$RUNNER_TEMP/published-rule.conf" "$url"
