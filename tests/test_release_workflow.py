@@ -82,8 +82,9 @@ class WorkflowTests(unittest.TestCase):
                     unmanaged = action("build", version, root / "unmanaged", "AmapAds", check=False)
                     self.assertNotEqual(unmanaged.returncode, 0)
                     registry.write_text(original_registry)
-                action("build", version, worktree, release.ENTRY)
-                action("push", version, worktree)
+                module_args = () if i == 0 else (release.ENTRY,)
+                action("build", version, worktree, *module_args)
+                action("push", version, worktree, *module_args)
                 commit = git("--git-dir", str(bare), "rev-parse", "refs/heads/rewrite-publications").stdout.decode().strip()
                 path = f"published/ReleaseCheck/{version}/{release.FILE}"
                 published.append((commit, path, data))
@@ -100,6 +101,18 @@ class WorkflowTests(unittest.TestCase):
                  "--module", release.ENTRY, "--output", str(root / "release-1/published")],
                 cwd=repo, check=True, capture_output=True,
             )
+
+    def test_existing_releasecheck_snapshot_reviews_identically_with_legacy_cli(self):
+        repo = SCRIPTS.parent
+        version = json.loads((repo / "manifests/approved.json").read_text())[release.ENTRY]["version"]
+        expected = json.loads((repo / f"manifests/approvals/{release.ENTRY}/{version}.json").read_text())
+        for options in ([], ["--module", release.ENTRY]):
+            with self.subTest(options=options):
+                result = subprocess.run(
+                    ["python3", "scripts/publish_rewrite.py", "review", version, *options],
+                    cwd=repo, check=True, capture_output=True,
+                )
+                self.assertEqual(json.loads(result.stdout), expected)
 
     def test_preparation_rejects_current_upstream_shape_without_writing_material(self):
         raw = br"""hostname = www.google.cn

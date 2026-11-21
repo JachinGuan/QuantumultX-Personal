@@ -1,3 +1,4 @@
+import io
 import json
 import shutil
 from pathlib import Path
@@ -74,6 +75,34 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "受审记录"):
             release.publish(self.reviewed, self.manifests, self.output)
         self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_publish_cli_rejects_ineligible_modules_and_wrong_versions_without_writing(self):
+        self.approve_fixture()
+        lock = self.active.read_bytes()
+        registry = self.root / "modules.json"
+        registered = {"monitor_enabled": False, "client_enabled": None, "managed": True,
+                      "update_policy": "review", "risk_status": "watch"}
+        cases = (
+            (release.ENTRY, self.version, {release.ENTRY: {**registered, "managed": False}}),
+            (release.ENTRY, self.version, {release.ENTRY: {**registered, "update_policy": "frozen"}}),
+            ("UnknownModule", self.version, {release.ENTRY: registered}),
+            (release.ENTRY, "../" + self.version, {release.ENTRY: registered}),
+            (release.ENTRY, "0" * 64, {release.ENTRY: registered}),
+        )
+        for module, version, modules in cases:
+            with self.subTest(module=module, version=version, modules=modules):
+                registry.write_text(json.dumps(modules))
+                args = ["publish_rewrite.py", "publish", version, "--module", module,
+                        "--registry", str(registry), "--input-dir", str(self.inputs),
+                        "--manifests", str(self.manifests), "--output", str(self.output)]
+                with patch("sys.argv", args), patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as result:
+                        release.main()
+                self.assertEqual(result.exception.code, 1)
+                self.assertIn("校验或发布失败", stderr.getvalue())
+                self.assertEqual(list(self.output.iterdir()), [])
+                self.assertEqual(self.active.read_bytes(), lock)
+                self.assertEqual(release.load_snapshot(self.inputs, self.version), self.reviewed)
 
     def test_manifest_tampering_after_review_is_rejected(self):
         self.approve_fixture()
