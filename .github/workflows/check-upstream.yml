@@ -2,20 +2,23 @@ name: QX upstream monitor
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: '17 2 * * *'
 
 permissions:
   contents: read
-  issues: write
-
-concurrency:
-  group: qx-upstream-issue-1
-  cancel-in-progress: false
 
 jobs:
   monitor:
+    concurrency:
+      group: qx-upstream-issue-1
+      cancel-in-progress: false
     if: github.ref == 'refs/heads/main' && github.repository == 'JachinGuan/QuantumultX-Personal'
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,3 +32,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: python3 scripts/check_upstream.py
+
+  preview:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Run monitor unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Inspect live upstream coverage (read only)
+        run: python3 scripts/check_upstream.py --dry-run

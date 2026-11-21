@@ -2,9 +2,9 @@ import io
 import json
 import unittest
 from unittest.mock import Mock, patch
-from urllib.error import HTTPError, URLError
 
 from scripts import check_upstream as monitor
+from scripts import upstream_transport as transport
 
 
 URL = "https://example.test/a.conf"
@@ -17,24 +17,25 @@ REWRITE = (
 
 
 class FakeResponse(io.BytesIO):
-    def __init__(self, data, *, status=200, url=URL, content_type="text/plain", **headers):
+    def __init__(self, data, *, status=200, content_type="text/plain", **headers):
         super().__init__(data)
         self.status = status
-        self.url = url
         self.headers = {"Content-Type": content_type, **headers}
 
-    def geturl(self):
-        return self.url
+    def getheader(self, name, default=None):
+        return self.headers.get(name, default)
 
 
 class DownloadTests(unittest.TestCase):
     def observe(self, response):
-        opener = Mock()
+        connection = Mock()
         if isinstance(response, Exception):
-            opener.open.side_effect = response
+            connection.getresponse.side_effect = response
         else:
-            opener.open.return_value = response
-        with patch.object(monitor.urllib.request, "build_opener", return_value=opener):
+            connection.getresponse.return_value = response
+        with patch.object(transport, "public_addresses", return_value=["8.8.8.8"]), patch.object(
+            transport, "PinnedHTTPS", return_value=connection
+        ):
             return monitor.observe(SOURCE)
 
     def test_valid_rewrite_is_hashed_and_profiled(self):
@@ -60,38 +61,40 @@ class DownloadTests(unittest.TestCase):
                 self.assertIsNone(result.profile)
 
     def test_download_failures_do_not_leak_exception_details(self):
-        error = URLError("private query value")
-        result = self.observe(error)
-        self.assertEqual(result.error, "download failed (URLError)")
-        result = self.observe(HTTPError(URL, 403, "forbidden", {}, None))
+        result = self.observe(OSError("private query value"))
+        self.assertEqual(result.error, "HTTPS 下载失败")
+        result = self.observe(FakeResponse(b"", status=403))
         self.assertEqual(result.error, "HTTP 403")
         result = self.observe(FakeResponse(REWRITE.encode(), status=206))
         self.assertIn("206", result.error)
 
-    def test_disallows_unexpected_final_url_and_validates_redirect_before_request(self):
-        result = self.observe(FakeResponse(REWRITE.encode(), url="https://example.test/"))
-        self.assertIn("homepage", result.error)
-        redirect = monitor.CheckedRedirect(lambda url: monitor.check_target(SOURCE, url))
-        for url in ("http://example.test/a.conf", "https://other.test/a.conf", "https://example.test/"):
-            with self.subTest(url=url), self.assertRaises(monitor.InvalidContent):
-                redirect.redirect_request(monitor.urllib.request.Request(URL), None, 302, "", {}, url)
+    def test_disallows_unexpected_redirect(self):
+        for url, reason in (
+            ("http://example.test/a.conf", "URL 被策略拒绝"),
+            ("https://other.test/a.conf", "跨域重定向"),
+            ("https://example.test/", "站点首页"),
+        ):
+            with self.subTest(url=url):
+                response = FakeResponse(b"", status=302, Location=url)
+                self.assertIn(reason, self.observe(response).error)
 
     def test_weatherkit_asset_redirects_are_scoped(self):
         source = {
             "url": "https://github.com/NSRingo/WeatherKit/releases/latest/download/file.snippet",
             "redirect_hosts": ["release-assets.githubusercontent.com"],
         }
-        monitor.check_target(source, "https://github.com/NSRingo/WeatherKit/releases/download/v1/file.snippet")
-        monitor.check_target(source, "https://release-assets.githubusercontent.com/asset?signature=value")
-        with self.assertRaises(monitor.InvalidContent):
-            monitor.check_target(source, "https://github.com/other/project/releases/download/v1/file.snippet")
+        release = "https://github.com/NSRingo/WeatherKit/releases/download/v1/file.snippet"
+        transport.allow_redirect(source["url"], release, source)
+        transport.allow_redirect(release, "https://release-assets.githubusercontent.com/asset?signature=value", source)
+        with self.assertRaises(transport.DownloadError):
+            transport.allow_redirect(source["url"], "https://github.com/other/project/releases/download/v1/file.snippet", source)
 
     def test_checks_response_bounds_and_representation(self):
         for data, headers, reason in [
             (b"", {}, "empty"),
-            (b"a" * (monitor.LIMIT + 1), {}, "2 MiB"),
-            (REWRITE.encode(), {"Content-Length": "999"}, "size does not match"),
-            (REWRITE.encode(), {"Content-Encoding": "gzip"}, "encoding"),
+            (b"a" * (monitor.LIMIT + 1), {}, "超出下载预算"),
+            (REWRITE.encode(), {"Content-Length": "999"}, "Content-Length 不符"),
+            (REWRITE.encode(), {"Content-Encoding": "gzip"}, "响应编码"),
             (b"\xff\x00", {}, "UTF-8"),
         ]:
             with self.subTest(reason=reason):

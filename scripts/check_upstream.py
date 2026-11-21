@@ -1,19 +1,23 @@
 """Validate external QX resources as text and record findings in GitHub Issue #1."""
 
 import argparse
+import base64
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
-from http.client import HTTPException
 import json
 import os
 from pathlib import Path
 import re
-import urllib.error
 import urllib.request
+import zlib
 from urllib.parse import urlsplit
+
+if __package__:
+    from . import upstream_graph as graph
+else:
+    import upstream_graph as graph
 
 ROOT = Path(__file__).resolve().parents[1]
 LIMIT = 2 * 1024 * 1024
@@ -39,7 +43,7 @@ RULE = re.compile(
 JS = re.compile(
     r"\b(?:const|let|var)\s+[$\w]+\s*=|\bfunction\s*[$\w]*\s*\(|=>|"
     r"\$(?:done|task\.fetch|httpClient\.\w+)\s*\(|"
-    r"\b(?:import|export)\s+|\b(?:eval|fetch|require|alert)\s*\("
+    r"\b(?:import|export)\s+|\b(?:eval|fetch|import|require|alert|importScripts)\s*\(|\bmodule\.exports\s*="
 )
 CHALLENGE = re.compile(
     r"/cdn-cgi/challenge-platform|cf-browser-verification|cf-chl-|"
@@ -88,33 +92,6 @@ class Observation:
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
-
-
-def https_parts(url):
-    try:
-        parts = urlsplit(url)
-        if (parts.scheme == "https" and parts.hostname and parts.port in (None, 443)
-                and parts.username is None and parts.password is None and not parts.fragment):
-            return parts
-    except ValueError:
-        pass
-    raise InvalidContent("URL is not an allowed HTTPS endpoint")
-
-
-def check_target(source, url):
-    original = https_parts(source["url"])
-    target = https_parts(url)
-    if target.hostname == original.hostname and target.path == original.path and target.query == original.query:
-        return
-    if original.hostname == target.hostname == "github.com" and "redirect_hosts" in source:
-        release_prefix = original.path.split("/latest/download/", 1)[0] + "/download/"
-        if target.path.startswith(release_prefix) and target.path.endswith("/" + original.path.split("/")[-1]):
-            return
-    if target.hostname == original.hostname and target.path in ("", "/"):
-        raise InvalidContent("source redirected to the site homepage")
-    if target.hostname in source.get("redirect_hosts", ()):
-        return
-    raise InvalidContent("redirect or final URL outside the source's allowed endpoints")
 
 
 class CheckedRedirect(urllib.request.HTTPRedirectHandler):
@@ -166,7 +143,7 @@ def validate(data, media_type, kind):
         if not rewrite_parts(body)[0]:
             raise InvalidContent("no recognized Quantumult X URL rewrite rules")
     else:
-        code = re.sub(r"^\s*//[^\n]*|^\s*/\*[\s\S]*?\*/", "", body, flags=re.M)
+        code = re.sub(r"^[ \t]*//[^\n]*|^[ \t]*/\*[\s\S]*?\*/", "", body, flags=re.M)
         if not JS.search(code):
             raise InvalidContent("no recognizable JavaScript code")
     return body
@@ -225,35 +202,12 @@ def profile(content, kind):
 
 
 def observe(source):
-    result = Observation()
-    opener = urllib.request.build_opener(CheckedRedirect(lambda url: check_target(source, url)))
-    try:
-        check_target(source, source["url"])
-        req = urllib.request.Request(source["url"], headers={"User-Agent": "QX-upstream-monitor/2.0"})
-        with opener.open(req, timeout=15) as response:
-            check_target(source, response.geturl())
-            if response.status != 200:
-                raise InvalidContent(f"unexpected HTTP status {response.status}")
-            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
-                raise InvalidContent("unsupported response encoding")
-            declared = response.headers.get("Content-Length")
-            if declared is not None and (not re.fullmatch(r"[0-9]{1,10}", declared) or int(declared) > LIMIT):
-                raise InvalidContent("invalid Content-Length or file exceeds 2 MiB")
-            data = response.read(LIMIT + 1)
-            if len(data) <= LIMIT:
-                result.sha256 = digest(data)
-            if declared is not None and len(data) != int(declared):
-                raise InvalidContent("response size does not match Content-Length")
-            media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        result.profile = profile(validate(data, media_type, source["kind"]), source["kind"])
-    except urllib.error.HTTPError as exc:
-        result.error = f"HTTP {exc.code}"
-        exc.close()
-    except InvalidContent as exc:
-        result.error = str(exc)
-    except (OSError, HTTPException) as exc:
-        result.error = f"download failed ({type(exc).__name__})"
-    return result
+    monitor = graph.GraphMonitor(validate, profile, InvalidContent)
+    result = monitor.load(source["url"], source["kind"], source)
+    if isinstance(result, str):
+        observed = monitor.observed_hashes.get((source["url"], source["kind"]), "")
+        return Observation(sha256=observed, error=result)
+    return Observation(result.sha256, result.profile)
 
 
 def read_state(body):
@@ -410,6 +364,76 @@ def render(sources, previous, observations):
     return report, body, bool(changes)
 
 
+def graph_report(sources, previous, previous_graph, approved, export=None):
+    monitor = graph.GraphMonitor(validate, profile, InvalidContent)
+    roots = {name: monitor.load(source["url"], source["kind"], source)
+             for name, source in sources.items()}
+    observations, snapshots = {}, {}
+    for name, source in sources.items():
+        root = roots[name]
+        if isinstance(root, str):
+            observed = monitor.observed_hashes.get((source["url"], source["kind"]), "")
+            observations[name] = Observation(sha256=observed, error=root)
+            continue
+        observations[name] = Observation(root.sha256, root.profile)
+        snapshots[name] = monitor.walk(name, source, root)
+        if export is not None:
+            monitor.export(export, snapshots[name])
+    current, _, _, _, _ = summarize(sources, previous, observations)
+    next_graph, blocks = graph.report_blocks(sources, snapshots, previous_graph, previous, approved)
+    failures = []
+    for name, observation in observations.items():
+        if observation.error:
+            old = previous.get(name, {}).get("sha256", "无")
+            observed = observation.sha256 or "无"
+            failures.append(
+                f"- **{name}** · {graph.safe(observation.error)} · 本轮哈希 `{observed}` · 保留基线 `{old}`，建议冻结。"
+            )
+    repeated = duplicates(
+        (graph.file_label(url), url, digest) for (url, _), digest in monitor.observed_hashes.items()
+    )
+    historical = duplicates(
+        (name, item["url"], item.get("legacy_sha256", item["sha256"] if "profile" not in item else ""))
+        for name, item in current.items()
+    )
+    summary = [
+        f"## 上游依赖检查 · {monitor.checked}", "",
+        f"- 已验证入口 {len(snapshots)}/{len(sources)}，有效入口和依赖共 {sum(not isinstance(r, str) for r in monitor.cache.values())} 份。",
+        f"- 候选记录变化 {len(blocks)} 项，候选冻结，Approved 由人工指定。",
+        "- 静态线索不能证明安全或数据外传。未执行或发布第三方代码。", "",
+        "### 下载或验证失败", *(failures or ["- 无"]), "",
+        "### 重复哈希（相同字节，需要排查响应来源）",
+        *((line.replace(" shared by ", " · 同一哈希出现在 ") for line in repeated + historical) if repeated or historical else ["- 无"]), "",
+        "### 入口与依赖变化",
+    ]
+    # Keep the full delta in timeline comments; leave room for the durable state.
+    details = "\n".join("\n".join(block) for block in blocks)
+    summary = "\n".join(summary)
+    state = json.dumps(current, ensure_ascii=True, separators=(",", ":")).replace("<", "\\u003c")
+    tail = f"\n\n{BEGIN}\n{state}\n{END}\n{graph.serialize_graph(next_graph)}"
+    comments = []
+    if details:
+        page = f"### 依赖变更 · {monitor.checked}\n"
+        page_size = len(page.encode())
+        for line in details.splitlines():
+            line_size = len(line.encode()) + 1
+            if page_size + line_size > 24000:
+                comments.append(page)
+                page = f"### 依赖变更（续） · {monitor.checked}\n"
+                page_size = len(page.encode())
+            page += line + "\n"
+            page_size += line_size
+        comments.append(page)
+    room = 64000 - len(summary.encode()) - len(tail.encode()) - len(issue_outbox(comments).encode())
+    if room < 200:
+        raise ValueError("依赖状态超出 Issue 容量，（含待发评论），旧基线已保留")
+    brief = details or "- 无候选变化。"
+    if len(brief.encode()) > room:
+        brief = brief.encode()[:room - 100].decode(errors="ignore").rsplit("\n", 1)[0]
+        brief += "\n- 其余变化见本次 Issue 评论。"
+    return summary + "\n" + (details or brief), summary + "\n" + brief + tail, comments
+
+
 def github_request(repo, token, suffix="", payload=None, method="GET"):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("Invalid GH_REPO")
@@ -426,34 +450,110 @@ def github_request(repo, token, suffix="", payload=None, method="GET"):
         return json.load(response)
 
 
+OUTBOX_BEGIN = "<!-- QX_OUTBOX_BEGIN -->"
+OUTBOX_END = "<!-- QX_OUTBOX_END -->"
+
+
+def issue_outbox(comments):
+    if not comments:
+        return ""
+    raw = graph.packed(comments)
+    if len(raw) > graph.STATE_LIMIT:
+        raise ValueError("待发评论超过存储上限，旧基线已保留")
+    encoded = base64.b64encode(zlib.compress(raw, level=9)).decode()
+    return f"\n{OUTBOX_BEGIN}\n{encoded}\n{OUTBOX_END}"
+
+
+def read_outbox(body):
+    if OUTBOX_BEGIN not in body and OUTBOX_END not in body:
+        return body, []
+    clean, _, rest = body.partition("\n" + OUTBOX_BEGIN + "\n")
+    encoded, separator, trailing = rest.partition("\n" + OUTBOX_END)
+    if not separator or trailing.strip() or len(encoded) > 64000:
+        raise ValueError("待发评论状态损坏")
+    decoder = zlib.decompressobj()
+    raw = decoder.decompress(base64.b64decode(encoded, validate=True), graph.STATE_LIMIT + 1)
+    if not decoder.eof or decoder.unused_data or len(raw) > graph.STATE_LIMIT:
+        raise ValueError("待发评论状态损坏")
+    comments = json.loads(raw)
+    if not isinstance(comments, list) or not comments or any(
+        not isinstance(comment, str) or not comment or len(comment.encode()) > 24000 for comment in comments
+    ):
+        raise ValueError("待发评论结构无效")
+    return clean, comments
+
+
+def deliver_outbox(request, body):
+    clean, comments = read_outbox(body)
+    if not comments:
+        return clean
+    version = digest(body.encode())
+    pending = {
+        f"<!-- QX_REPORT:{version}:{index} -->\n{comment}" for index, comment in enumerate(comments)
+    }
+    page = 1
+    while pending:
+        existing = request(f"/comments?per_page=100&page={page}")
+        pending.difference_update(item.get("body") or "" for item in existing)
+        if len(existing) < 100:
+            break
+        page += 1
+    for index, comment in enumerate(comments):
+        marked = f"<!-- QX_REPORT:{version}:{index} -->\n{comment}"
+        if marked in pending:
+            request("/comments", {"body": marked}, "POST")
+    request(payload={"body": clean}, method="PATCH")
+    return clean
+
+
+def publish_issue(request, body, comments):
+    pending_body = body + issue_outbox(comments)
+    if len(pending_body.encode()) > 64000:
+        raise ValueError("待发评论超出 Issue 容量，旧基线已保留")
+    request(payload={"body": pending_body}, method="PATCH")
+    if comments:
+        deliver_outbox(request, pending_body)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print findings and skip all GitHub issue requests")
     parser.add_argument("--baseline", type=Path, help="saved issue body to use with --dry-run")
+    parser.add_argument("--candidate-dir", type=Path, help="export immutable candidate snapshots (dry-run only)")
+    parser.add_argument("--approved-lock", type=Path, help="read an explicitly maintained name-to-version JSON lock")
     args = parser.parse_args()
-    if args.baseline and not args.dry_run:
-        parser.error("--baseline requires --dry-run")
+    if (args.baseline or args.candidate_dir) and not args.dry_run:
+        parser.error("--baseline and --candidate-dir require --dry-run")
     sources = json.loads((ROOT / "upstream/sources.json").read_text())
     for name, source in sources.items():
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or source["kind"] not in ("rewrite", "javascript"):
             raise ValueError("Invalid source manifest")
     if args.dry_run:
-        previous = read_state(args.baseline.read_text()) if args.baseline else {}
+        issue_body = args.baseline.read_text(encoding="utf-8") if args.baseline else ""
     else:
         repo, token = os.environ["GH_REPO"], os.environ["GH_TOKEN"]
-        issue = github_request(repo, token)
+        def request(suffix="", payload=None, method="GET"):
+            return github_request(repo, token, suffix, payload, method)
+
+        issue = request()
         if issue.get("title") != ISSUE_TITLE or "pull_request" in issue:
             raise ValueError("Issue #1 does not match the monitor issue")
-        previous = read_state(issue["body"])
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        observations = dict(zip(sources, pool.map(observe, sources.values())))
-    report, body, changed = render(sources, previous, observations)
-    # A single API update commits the observation and baseline together. The
-    # separate comment preserves substantive checks in the issue timeline.
+        issue_body = issue["body"]
+        if not isinstance(issue_body, str) or not issue_body:
+            raise ValueError("Issue #1 的基线为空")
+    previous = read_state(issue_body) if issue_body else {}
+    previous_graph = graph.read_graph(issue_body)
     if not args.dry_run:
-        if changed:
-            github_request(repo, token, "/comments", {"body": report}, "POST")
-        github_request(repo, token, payload={"body": body}, method="PATCH")
+        deliver_outbox(request, issue_body)
+    approved_path = args.approved_lock
+    default_lock = ROOT / "manifests/approved.json"
+    if approved_path is None and default_lock.is_file():
+        approved_path = default_lock
+    report, body, comments = graph_report(
+        sources, previous, previous_graph, graph.approved_versions(approved_path), args.candidate_dir
+    )
+    if not args.dry_run:
+        publish_issue(request, body, comments)
         print(f"Checked {len(sources)} sources; details recorded in Issue #1.")
     else:
         print(report)
