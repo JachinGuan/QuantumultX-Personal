@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
@@ -214,6 +215,46 @@ class GraphTests(unittest.TestCase):
             report, _, comments = monitor.graph_report(SOURCES, resumed, graph.read_graph(body), {})
             self.assertIn("无候选变化", report)
             self.assertFalse(comments)
+
+    def test_failed_monitor_run_preserves_approved_lock_and_snapshot(self):
+        digest = "a" * 64
+        baseline = {"Example": {"url": ROOT, "sha256": digest}}
+        issue_body = f"{monitor.BEGIN}\n{json.dumps(baseline)}\n{monitor.END}"
+        factory = graph.GraphMonitor
+
+        def fail(*_):
+            raise transport.DownloadError("fixture download failure")
+
+        def setup(*args):
+            return factory(*args, fetch=fail)
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            sources = repo / "upstream/sources.json"
+            sources.parent.mkdir()
+            sources.write_text(json.dumps(SOURCES))
+            lock = repo / "manifests/approved.json"
+            lock.parent.mkdir()
+            lock.write_text(json.dumps({"ReleaseCheck": {"version": digest, "manifest_sha256": "b" * 64}}))
+            saved = repo / "release-inputs/ReleaseCheck" / digest / "objects" / ("c" * 64 + ".blob")
+            saved.parent.mkdir(parents=True)
+            saved.write_bytes(b"approved bytes")
+            original = {path: path.read_bytes() for path in (lock, saved)}
+            with (
+                patch.object(monitor, "ROOT", repo),
+                patch.object(graph, "GraphMonitor", side_effect=setup),
+                patch.dict(os.environ, {"GH_REPO": "sample/repo", "GH_TOKEN": "fixture"}),
+                patch("sys.argv", ["check_upstream.py"]),
+                patch("builtins.print"),
+                patch.object(monitor, "github_request", return_value={"title": monitor.ISSUE_TITLE, "body": issue_body}) as api,
+            ):
+                monitor.main()
+            self.assertEqual(api.call_count, 2)
+            _, _, suffix, payload, method = api.call_args.args
+            self.assertEqual((suffix, method), ("", "PATCH"))
+            self.assertEqual(monitor.read_state(payload["body"]), baseline)
+            self.assertIn("fixture download failure", payload["body"])
+            self.assertEqual({path: path.read_bytes() for path in original}, original)
 
     def test_untrusted_evidence_cannot_inject_markdown_or_workflow_commands(self):
         text = graph.safe('@reviewer\n`</details>\n::warning::bad')
