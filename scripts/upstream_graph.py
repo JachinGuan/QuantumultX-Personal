@@ -64,6 +64,21 @@ def reference_url(reference, base, kind):
     return value
 
 
+def dependency_policy(source, target):
+    """Reuse explicit Release asset permissions only within the entry's repository."""
+    hosts = source.get("redirect_hosts")
+    if not hosts:
+        return {}
+    origin, child = urlsplit(source["url"]), urlsplit(target)
+    origin_path = re.fullmatch(r"(/[^/]+/[^/]+)/releases/latest/download/[^/]+", origin.path)
+    if origin.hostname != "github.com" or child.hostname != origin.hostname or not origin_path:
+        return {}
+    prefix = re.escape(origin_path[1]) + r"/releases/download/"
+    if re.fullmatch(prefix + r"[^/]+/[^/]+", child.path):
+        return {"url": target, "redirect_hosts": hosts}
+    return {}
+
+
 class GraphMonitor:
     def __init__(self, validate, profile, invalid_content, *, fetch=download,
                  max_files=MAX_FILES, max_depth=MAX_DEPTH, max_total=MAX_TOTAL_BYTES, max_seconds=MAX_SECONDS):
@@ -81,7 +96,7 @@ class GraphMonitor:
         self.observed_hashes = {}
 
     def load(self, url, kind, source):
-        key = (url, kind)
+        key = (url, kind, tuple(source.get("redirect_hosts", ())))
         if key in self.cache:
             return self.cache[key]
         if len(self.cache) >= self.max_files:
@@ -97,7 +112,7 @@ class GraphMonitor:
             if len(response.data) > size_limit:
                 raise DownloadError("文件超出下载预算")
             digest = sha(response.data)
-            self.observed_hashes[key] = digest
+            self.observed_hashes[url, kind] = digest
             content = self.validate(response.data, response.media_type, kind)
             scan = (rewrite_scan if kind == "rewrite" else javascript_scan)(content)
             result = Resource(response.data, response.final_url, response.media_type, response.redirects,
@@ -150,7 +165,7 @@ class GraphMonitor:
                 if depth >= self.max_depth or target not in nodes and len(nodes) >= MAX_ENTRY_FILES:
                     cutoff = True
                     continue
-                child = self.load(target, "javascript", {})
+                child = self.load(target, "javascript", dependency_policy(source, target))
                 if isinstance(child, str):
                     issues.append((target, 0, child))
                     failed = True
@@ -191,9 +206,10 @@ class GraphMonitor:
             temporary = Path(working) / "version"
             assets = temporary / "objects"
             assets.mkdir(parents=True)
-            for url, node in snapshot["files"].items():
-                resource = self.cache[url, node["kind"]]
-                (assets / (node["sha256"] + ".blob")).write_bytes(resource.data)
+            objects = {resource.sha256: resource.data for resource in self.cache.values()
+                       if isinstance(resource, Resource)}
+            for digest in {node["sha256"] for node in snapshot["files"].values()}:
+                (assets / (digest + ".blob")).write_bytes(objects[digest])
             manifest = {
                 **snapshot,
                 "files": {url: {**node, "original_url": url, "checked_at": snapshot["checked_at"],

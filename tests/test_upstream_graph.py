@@ -136,6 +136,21 @@ class GraphTests(unittest.TestCase):
         only_dynamic = graph.read_graph(graph.serialize_graph({"Example": dynamic}))
         self.assertIsNone(only_dynamic["Example"]["last_complete"])
 
+    def test_release_dependency_inherits_only_same_project_asset_permissions(self):
+        root = "https://github.com/owner/project/releases/latest/download/main.snippet"
+        child = "https://github.com/owner/project/releases/download/v1/handler.js"
+        asset = "https://release-assets.githubusercontent.com/asset?signature=value"
+        source = {"url": root, "kind": "rewrite", "redirect_hosts": ["release-assets.githubusercontent.com"]}
+        policy = graph.dependency_policy(source, child)
+        self.assertEqual(policy["url"], child)
+        transport.allow_redirect(child, asset, policy)
+        for different in (child.replace("/owner/project/", "/owner/other/"),
+                          child.replace("/releases/download/", "/raw/"),
+                          child.replace("github.com", "other.example")):
+            self.assertEqual(graph.dependency_policy(source, different), {})
+            with self.assertRaises(transport.DownloadError):
+                transport.allow_redirect(different, asset, policy if "/raw/" in different else {})
+
     def test_depth_file_and_total_size_limits(self):
         files = {ROOT: fixture(rewrite()), FIRST: fixture(b'import "./second.js";', FIRST),
                  SECOND: fixture(b"const second = 1;", SECOND)}

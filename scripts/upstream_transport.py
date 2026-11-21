@@ -136,7 +136,8 @@ def allow_redirect(previous, target, source):
             if new.path != original.path and not release:
                 raise DownloadError("GitHub Release 跳转不属于原项目和资源")
         return
-    if old.hostname == "github.com" and new.hostname in allowed_assets:
+    if (old.hostname == "github.com" and new.hostname in allowed_assets
+            and re.fullmatch(r"/[^/]+/[^/]+/releases/(?:latest/download|download/[^/]+)/[^/]+", old.path)):
         return
     # GitHub's public Gist raw route. Keep the same owner and gist ID.
     match = re.fullmatch(r"/([^/]+)/([a-fA-F0-9]{5,64})/raw(?:/[^?#]*)?", old.path)
