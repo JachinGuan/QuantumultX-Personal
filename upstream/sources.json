@@ -9,7 +9,11 @@
   },
   "BiliBiliAdsLite": {
     "url": "https://ddgksf2013.top/rewrite/BiliBiliAdsLite.conf",
-    "kind": "rewrite"
+    "kind": "rewrite",
+    "investigation": {
+      "status": "homepage_redirect_unresolved",
+      "reason": "原入口跳转到 HTML 首页。原作者历史 Rewrite 已删除，其 bilibili_json.js 依赖返回 404。"
+    }
   },
   "Spotify": {
     "url": "https://raw.githubusercontent.com/app2smile/rules/master/module/spotify.conf",
@@ -17,7 +21,11 @@
   },
   "StartUpAds": {
     "url": "https://ddgksf2013.top/rewrite/StartUpAds.conf",
-    "kind": "rewrite"
+    "kind": "rewrite",
+    "investigation": {
+      "status": "homepage_redirect_unresolved",
+      "reason": "原入口跳转到 HTML 首页。原作者的 2.0 Gist 返回 404，旧 StartUp.conf 的依赖无法完整下载和验证。"
+    }
   },
   "CaiYunAds": {
     "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/AdBlock/CaiYunAds.conf",
@@ -25,7 +33,11 @@
   },
   "ZhiHu": {
     "url": "https://ddgksf2013.top/scripts/zhihu.ads.js",
-    "kind": "javascript"
+    "kind": "javascript",
+    "investigation": {
+      "status": "homepage_redirect_unresolved",
+      "reason": "原入口跳转到 HTML 首页。原作者历史 Gist 返回 404，旧 zhihu.js 只有注释，现存开屏脚本无法确认等价。"
+    }
   },
   "YouTubeAds": {
     "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/AdBlock/YoutubeAds.conf",
@@ -41,7 +53,11 @@
   },
   "XiaoHongShu": {
     "url": "https://ddgksf2013.top/rewrite/XiaoHongShuAds.conf",
-    "kind": "rewrite"
+    "kind": "rewrite",
+    "investigation": {
+      "status": "homepage_redirect_unresolved",
+      "reason": "原入口跳转到 HTML 首页。原作者历史 Rewrite 已删除，其 redbook_json.js 依赖返回 404。"
+    }
   },
   "BoxJS": {
     "url": "https://raw.githubusercontent.com/chavyleung/scripts/master/box/rewrite/boxjs.rewrite.quanx.conf",
