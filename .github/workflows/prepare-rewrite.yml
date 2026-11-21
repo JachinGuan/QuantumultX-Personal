@@ -1,0 +1,55 @@
+name: Prepare ReleaseCheck review materials
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.repository == 'JachinGuan/QuantumultX-Personal' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Fetch pinned project-owned rule and prepare review
+        id: materials
+        env:
+          REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          material="$RUNNER_TEMP/qx-review"
+          version="$(python3 scripts/prepare_rewrite.py "$REVISION" --output "$material")"
+          [[ "$version" =~ ^[a-f0-9]{64}$ ]]
+          blob=("$material/release-inputs/ReleaseCheck/$version/objects/"*.blob)
+          cmp pilot/ReleaseCheck.conf "${blob[0]}"
+          {
+            printf '### ReleaseCheck 静态风险\n\n'
+            printf '固定提交的 HTTPS 来源；原始文件字节与检出一致，无跳转或脚本依赖。MITM 仅 example.com，规则仅匹配 HTTPS 诊断路径并返回 302 到 https://example.org/。尚需实际 QX 验证。\n\n'
+            printf '```json\n'
+            cat "$material/manifests/approvals/ReleaseCheck/$version.json"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - name: Simulate approval, immutable Git publication and rollback offline
+        env:
+          QX_TEST_MATERIAL: ${{ runner.temp }}/qx-review
+          QX_TEST_VERSION: ${{ steps.materials.outputs.version }}
+        run: python3 -m unittest discover -s tests -p test_release_workflow.py -v
+      - name: Record small review bundle for restricted networks
+        run: |
+          set -euo pipefail
+          bundle="$(tar -czf - -C "$RUNNER_TEMP/qx-review" release-inputs manifests | base64 -w0)"
+          [[ ${#bundle} -le 12000 ]]
+          printf 'QX_REVIEW_BUNDLE %s\n' "$bundle"
+      - name: Save read-only review material
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-check-review
+          path: ${{ runner.temp }}/qx-review
+          if-no-files-found: error

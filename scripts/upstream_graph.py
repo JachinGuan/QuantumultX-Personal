@@ -40,6 +40,17 @@ def packed(value):
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
 
 
+def snapshot_version(root, files, relations, issues):
+    """Bind a snapshot to its resource closure, independently of observation time."""
+    identity = {
+        "root": root,
+        "files": {url: [node["sha256"], node["final_url"], node["media_type"]] for url, node in files.items()},
+        "relations": relations,
+        "issues": issues,
+    }
+    return sha(packed(identity))
+
+
 @dataclass
 class Resource:
     data: bytes
@@ -181,15 +192,9 @@ class GraphMonitor:
         mitm = root.profile.get("mitm", [])
         if "mitm" in root.profile.get("truncated", []):
             issues.append((source["url"], 0, "MITM 范围列表达到上限"))
-        # Include incomplete edges and checked content in the identity, but exclude timestamps.
-        identity = {
-            "root": source["url"],
-            "files": {url: [node["sha256"], node["final_url"], node["media_type"]] for url, node in nodes.items()},
-            "relations": relations,
-            "issues": issues,
-        }
         return {
-            "entry": name, "version": sha(packed(identity)), "checked_at": self.checked,
+            "entry": name, "version": snapshot_version(source["url"], nodes, relations, issues),
+            "checked_at": self.checked,
             "root": source["url"], "files": nodes, "dependencies": relations, "issues": issues,
             "mitm": mitm, "graph_complete": not issues, "fetch_failed": failed,
             "review_status": "candidate", "frozen": True, "approval_eligible": not issues,
@@ -233,12 +238,20 @@ def approved_versions(path):
     if path is None:
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or any(
-        not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not isinstance(version, str) or not SHA.fullmatch(version)
-        for name, version in value.items()
-    ):
-        raise ValueError("审核锁必须是来源名称到版本 SHA-256 的 JSON 映射")
-    return value
+    if not isinstance(value, dict):
+        raise ValueError("审核锁必须是 JSON 对象")
+    versions = {}
+    for name, record in value.items():
+        version = record
+        if isinstance(record, dict):
+            manifest = record.get("manifest_sha256")
+            if set(record) != {"version", "manifest_sha256"} or not isinstance(manifest, str) or not SHA.fullmatch(manifest):
+                raise ValueError("审核锁中的清单 SHA-256 无效")
+            version = record["version"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not isinstance(version, str) or not SHA.fullmatch(version):
+            raise ValueError("审核锁中的来源或版本 SHA-256 无效")
+        versions[name] = version
+    return versions
 
 
 def read_graph(body):
