@@ -1,0 +1,45 @@
+{
+  "entry": "ReleaseCheck",
+  "version": "dc05067119c824b071c8b60ef576c9bffa46b7cdcb0f074e4b05a772b5d49aed",
+  "checked_at": "2026-11-21T04:22:24+00:00",
+  "root": "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/569736848328353b218f507709413163f5e8bc7c/pilot/ReleaseCheck.conf",
+  "files": {
+    "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/569736848328353b218f507709413163f5e8bc7c/pilot/ReleaseCheck.conf": {
+      "sha256": "0991634f1d53fd6aa8902c9d4aae0555207c0f411d61d4b5506ac600a502b09f",
+      "final_url": "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/569736848328353b218f507709413163f5e8bc7c/pilot/ReleaseCheck.conf",
+      "media_type": "text/plain",
+      "kind": "rewrite",
+      "findings": [
+        [
+          "mitm",
+          3,
+          "example.com"
+        ],
+        [
+          "mutation",
+          5,
+          "302"
+        ],
+        [
+          "network",
+          5,
+          "example.org"
+        ]
+      ],
+      "redirects": [],
+      "original_url": "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/569736848328353b218f507709413163f5e8bc7c/pilot/ReleaseCheck.conf",
+      "checked_at": "2026-11-21T04:22:24+00:00",
+      "review_status": "candidate"
+    }
+  },
+  "dependencies": [],
+  "issues": [],
+  "mitm": [
+    "example.com"
+  ],
+  "graph_complete": true,
+  "fetch_failed": false,
+  "review_status": "candidate",
+  "frozen": true,
+  "approval_eligible": true
+}
