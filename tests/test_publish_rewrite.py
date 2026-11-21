@@ -49,7 +49,7 @@ class ReleaseTests(unittest.TestCase):
         return snapshot["version"]
 
     def approve_fixture(self):
-        self.active.write_text(json.dumps({release.ENTRY: self.version}))
+        self.active.write_text(json.dumps({release.ENTRY: release.approval_binding(self.reviewed)}))
         self.record.write_text(json.dumps(self.reviewed.review))
 
     def edit_manifest(self, update):
@@ -62,6 +62,9 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "人工批准锁"):
             release.publish(self.reviewed, self.manifests, self.output)
         self.active.write_text(json.dumps({release.ENTRY: self.version}))
+        with self.assertRaisesRegex(ValueError, "人工批准锁"):
+            release.publish(self.reviewed, self.manifests, self.output)
+        self.active.write_text(json.dumps({release.ENTRY: release.approval_binding(self.reviewed)}))
         with self.assertRaises(FileNotFoundError):
             release.publish(self.reviewed, self.manifests, self.output)
         self.approve_fixture()
@@ -74,7 +77,8 @@ class ReleaseTests(unittest.TestCase):
         self.approve_fixture()
         self.edit_manifest(lambda manifest: manifest.update(checked_at="changed"))
         modified = release.load_snapshot(self.inputs, self.version)
-        with self.assertRaisesRegex(ValueError, "受审记录"):
+        self.record.write_text(json.dumps(modified.review))
+        with self.assertRaisesRegex(ValueError, "人工批准锁"):
             release.publish(modified, self.manifests, self.output)
 
     def test_duplicate_refuses_overwrite_and_publish_uses_verified_bytes(self):

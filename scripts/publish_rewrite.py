@@ -120,13 +120,17 @@ def load_snapshot(input_dir, version):
                            "manifest_sha256": sha(raw), "files": {SOURCE: digest}})
 
 
+def approval_binding(reviewed):
+    return {key: reviewed.review[key] for key in ("version", "manifest_sha256")}
+
+
 def check_approval(manifests, reviewed, *, require_active):
     version = reviewed.review["version"]
     with directory(manifests) as root:
         if require_active:
             active = parse_json(read_file(root, "approved.json", METADATA_LIMIT))
-            if active.get(ENTRY) != version:
-                raise ValueError("版本尚未在人工批准锁中设为当前版本")
+            if active.get(ENTRY) != approval_binding(reviewed):
+                raise ValueError("人工批准锁未绑定当前版本与清单 SHA-256")
         with directory("approvals", root) as approvals, directory(ENTRY, approvals) as entry:
             record = parse_json(read_file(entry, version + ".json", METADATA_LIMIT))
     if packed(record) != packed(reviewed.review):

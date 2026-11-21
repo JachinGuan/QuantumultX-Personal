@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'JachinGuan/QuantumultX-Personal'
+    if: github.ref == 'refs/heads/main' && github.ref_protected && github.repository == 'JachinGuan/QuantumultX-Personal' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -35,4 +35,11 @@ jobs:
           [[ "$VERSION" =~ ^[a-f0-9]{64}$ ]]
           branch="review/google-redirect-${VERSION:0:16}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           git -c credential.helper='!gh auth git-credential' push origin "HEAD:refs/heads/$branch"
+          {
+            printf '### GoogleRedirect 静态检查\n\n'
+            printf '固定 HTTPS 入口、完整快照、无脚本依赖。规则仅匹配 www.google.cn 的 HTTPS 请求，返回 302 指向 https://www.google.com。MITM 范围为 www.google.cn。仍需人工审查和客户端验证。\n\n'
+            printf '审核记录含版本 ID、清单 SHA-256 与入口 SHA-256：\n\n```json\n'
+            cat "manifests/approvals/GoogleRedirect/$VERSION.json"
+            printf '```\n\n'
+          } >> "$GITHUB_STEP_SUMMARY"
           printf '[Open approval proposal](https://github.com/%s/compare/main...%s?expand=1)\n' "$GITHUB_REPOSITORY" "$branch" >> "$GITHUB_STEP_SUMMARY"

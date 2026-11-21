@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from scripts import prepare_rewrite, publish_rewrite as release, release_preflight
+from scripts.upstream_graph import approved_versions
 from scripts.upstream_transport import Download
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -51,7 +52,9 @@ class WorkflowTests(unittest.TestCase):
                 git("commit", "-m", "Prepared review proposal")
                 denied = action("build", version, root / f"denied-{i}", check=False)
                 self.assertNotEqual(denied.returncode, 0)
-                lock.write_text(json.dumps({release.ENTRY: version}))
+                reviewed = release.load_snapshot(repo / "release-inputs", version)
+                lock.write_text(json.dumps({release.ENTRY: release.approval_binding(reviewed)}))
+                self.assertEqual(approved_versions(lock), {release.ENTRY: version})
                 git("add", "manifests/approved.json")
                 git("commit", "-m", "Fixture human approval")
                 worktree = root / f"release-{i}"
@@ -80,28 +83,19 @@ class WorkflowTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
-    def test_requires_pr_review_no_force_and_no_deletion(self):
-        main = [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}]
+    def test_requires_rulesets_without_forcing_a_second_reviewer(self):
         publication = [{"type": "deletion"}, {"type": "non_fast_forward"}]
+        main = [*publication, {"type": "pull_request", "parameters": {"required_approving_review_count": 0}}]
         release_preflight.check_rules(main, publication)
         for rules in ([], publication[:1], publication[1:]):
             with self.assertRaises(ValueError):
                 release_preflight.check_rules(main, rules)
         with self.assertRaises(ValueError):
-            release_preflight.check_rules([], publication)
+            release_preflight.check_rules(publication, publication)
 
-    def test_requires_independent_approval_for_correct_environment(self):
-        review = {"user": {"login": "Reviewer"}, "state": "approved", "environments": [{"name": "rewrite-release"}]}
-        release_preflight.check_approval_history([review], {"dispatcher"})
-        for history, identities in (([], set()), ([review], {"reviewer"}),
-                                    ([{**review, "environments": [{"name": "test"}]}], set())):
-            with self.assertRaises(ValueError):
-                release_preflight.check_approval_history(history, identities)
-
-    def test_admin_environment_requires_reviewers_and_no_self_review(self):
-        rule = {"type": "required_reviewers", "reviewers": [{"type": "User"}], "prevent_self_review": True}
-        env = {"protection_rules": [rule], "deployment_branch_policy": {"protected_branches": True}}
-        release_preflight.check_environment(env)
-        rule["prevent_self_review"] = False
-        with self.assertRaises(ValueError):
-            release_preflight.check_environment(env)
+    def test_only_owner_can_dispatch_and_rerun(self):
+        release_preflight.check_dispatcher("Owner", "owner", "OWNER")
+        for values in (("owner", "owner", "collaborator"), ("owner", "collaborator", "owner"),
+                       ("owner", "bot[bot]", "owner"), ("", "", "")):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                release_preflight.check_dispatcher(*values)

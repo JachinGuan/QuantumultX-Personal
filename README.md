@@ -28,7 +28,7 @@ Issue 正文保留原 `QX_STATE` 块，另存压缩的依赖状态。旧基线�
 
 - **Upstream** 是本轮观察到的资源与依赖图。每份有效资源独立记录原始和最终 URL、媒体类型、SHA-256，检查时间保存在快照上。
 - **Candidate** 是由入口内容、依赖内容、关系和问题记录共同标识的冻结快照。入口不变时，依赖变化仍会产生新的版本 ID。候选快照只通过本地显式导出落盘，Actions 仅保留 Issue 中的元数据和报告。
-- **Approved** 是操作员通过独立审查明确指定的版本 ID。监控只读批准锁，告警和导出都不会改动它。保留本地历史候选目录即可按哈希恢复当时的文件，日后可通过人工审查的独立变更将批准锁指回相应版本。没有保存快照字节的历史上游版本只能追溯元数据，无法保证重下载。
+- **Approved** 是维护者人工复核后明确指定的版本 ID。监控只读批准锁，告警和导出都不会改动它。保留本地历史候选目录即可按哈希恢复当时的文件，日后可通过人工审查的独立变更将批准锁指回相应版本。没有保存快照字节的历史上游版本只能追溯元数据，无法保证重下载。
 
 使用 Python 3.10 或以上。在仓库根目录运行：
 
@@ -38,7 +38,7 @@ python3 scripts/check_upstream.py --dry-run
 python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candidate-dir candidates
 ```
 
-`--dry-run` 不写入 Issue。`--baseline` 可提供保存的 Issue 正文。`--candidate-dir` 仅在试运行时可用，导出 `candidates/<入口>/<版本>/manifest.json` 和按内容哈希命名的 `objects/*.blob`。对象包含未执行的原始字节，需保留全部文件才能离线复核。`--approved-lock` 可显式读取一份操作员维护的 JSON，键为入口名，值为已批准的版本 SHA-256。
+`--dry-run` 不写入 Issue。`--baseline` 可提供保存的 Issue 正文。`--candidate-dir` 仅在试运行时可用，导出 `candidates/<入口>/<版本>/manifest.json` 和按内容哈希命名的 `objects/*.blob`。对象包含未执行的原始字节，需保留全部文件才能离线复核。`--approved-lock` 可显式读取一份操作员维护的 JSON，键为入口名，值为版本 SHA-256 或包含 `version`、`manifest_sha256` 的对象。旧格式仅供监控显示，试点发布要求绑定清单的对象格式。
 
 ### 后续受控发布
 
@@ -58,14 +58,15 @@ hostname = www.google.cn
 ### 候选、审核与批准
 
 1. 在 GitHub Actions 手动运行 **Prepare GoogleRedirect approval materials**，选择受保护的 `main`。任务从固定原始地址重新下载，使用与发布器相同的策略校验候选。通过后将原字节和审核记录写入独立的 `review/google-redirect-*` 提案分支，运行摘要提供创建批准 PR 的链接。准备任务不修改 `manifests/approved.json`。
-2. 用 iPad 浏览器打开提案链接。独立审核者应核对工作流运行、`release-inputs/GoogleRedirect/<版本>/` 的原始文件与清单，以及 `manifests/approvals/GoogleRedirect/<版本>.json` 的哈希。由操作员在提案分支上用 GitHub 网页编辑 `manifests/approved.json`，将 `GoogleRedirect` 指向该版本。审核者检查最终差异后，再由有权限的人手动合并批准 PR。无需上传文件。保留旧快照和审核记录。
+2. 用 iPad 浏览器打开提案链接。仓库所有者核对 Actions 摘要里的静态检查、原始文件、完整依赖图和审核记录。确认后，在提案分支上用 GitHub 网页编辑 `manifests/approved.json`，从同一审核记录填写 `GoogleRedirect` 的 `version` 和 `manifest_sha256`。检查最终差异后手动合并批准 PR。无需上传文件。保留旧快照和审核记录。
 3. 当前试点仅用 Fixture 验证。现行上游会在第 1 步被拒绝，因而不会生成提案分支。若要替换来源，应另开 PR 审核原始来源、规则语义与权限边界。
 
-### 管理员验收
+### 单人维护与管理员验收
 
-- 配置实际生效的 GitHub ruleset，让 `main` 要求 PR 和至少一名审批者，限制绕过，并在新提交后撤销过时的审批。仅启用经典分支保护不足以通过此处的规则集检查。
-- 配置 `rewrite-publications` 的规则集，禁止强推和删除，仅允许指定发布流程追加。必要时管理员可先创建指向受保护提交的空发布分支。操作员应核对规则绕过列表和 Actions 权限。当前开发凭据无法读取 Actions 管理权限，也无法证明受限 GITHUB_TOKEN 能向该分支推送。
-- 配置 `rewrite-release` 环境，限制只能从受保护 `main` 部署，启用必需审核者和禁止自审。用管理员凭据运行 `GITHUB_REPOSITORY=JachinGuan/QuantumultX-Personal python3 scripts/release_preflight.py admin` 检查生效规则和环境配置。发布任务还会检查本次运行的独立环境批准记录。API 拒绝读取时会停止。
+- 人工批准和发布是同一维护者执行的两个独立动作。准备任务生成静态风险摘要和审核材料，只有维护者手动提交精确版本及清单 SHA-256 才形成发布所需的批准。发布派发的确认框只确认执行。监控和准备流程无法写入批准锁。
+- 配置生效的 GitHub ruleset，要求 `main` 经 PR 更新，并禁止强推、删除和不必要的绕过。所需审批人数设为 **0**。为 `rewrite-publications` 禁止强推和删除，仅允许指定发布流程追加。管理员应核对绕过列表和 Actions 写权限。
+- 用管理员凭据运行 `GITHUB_REPOSITORY=JachinGuan/QuantumultX-Personal python3 scripts/release_preflight.py admin` 检查生效规则。发布任务还会验证原始派发者和重跑发起者均为仓库所有者。无需 GitHub Environment 独立审核。若当前方案、权限或仓库配置无法提供所需规则集，保留只读试点，发布流程会拒绝继续。
+- 该模型防止上游变动、普通分支修改或误操作直接发布。它信任所有者账号，以及通过仓库规则进入 `main` 的代码和批准记录。所有者凭据失陷或规则被有权限的人绕过不在保障范围内。同一账号的人工批准不等于独立审查，AI 和静态风险分析均不能保证安全。
 
 ### 部署和回滚
 
@@ -78,4 +79,4 @@ hostname = www.google.cn
 
 - 缺失快照、哈希不一致、语法拒绝或批准不匹配时，停止发布并重新从可验证的候选开始审查。切勿修改旧记录来匹配新字节。
 - 若 Git 推送或推送后的 URL 验证失败，先检查远程发布分支。已有版本应核对该次提交和凭据，并使用原不可变 URL。远程没有该版本时可重新派发批准过的版本；遇到并发提交也无需强推。
-- 只读预览和本地测试使用临时 Fixture，永远不向发布分支写入。真实发布权限、环境审核及客户端兼容性需要管理员和审查者在部署时确认。
+- 只读预览和本地测试使用临时 Fixture，永远不向发布分支写入。真实发布权限、规则集及客户端兼容性需要管理员和审查者在部署时确认。

@@ -238,12 +238,20 @@ def approved_versions(path):
     if path is None:
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or any(
-        not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not isinstance(version, str) or not SHA.fullmatch(version)
-        for name, version in value.items()
-    ):
-        raise ValueError("审核锁必须是来源名称到版本 SHA-256 的 JSON 映射")
-    return value
+    if not isinstance(value, dict):
+        raise ValueError("审核锁必须是 JSON 对象")
+    versions = {}
+    for name, record in value.items():
+        version = record
+        if isinstance(record, dict):
+            manifest = record.get("manifest_sha256")
+            if set(record) != {"version", "manifest_sha256"} or not isinstance(manifest, str) or not SHA.fullmatch(manifest):
+                raise ValueError("审核锁中的清单 SHA-256 无效")
+            version = record["version"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not isinstance(version, str) or not SHA.fullmatch(version):
+            raise ValueError("审核锁中的来源或版本 SHA-256 无效")
+        versions[name] = version
+    return versions
 
 
 def read_graph(body):
