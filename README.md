@@ -53,7 +53,7 @@ python3 scripts/check_upstream.py --dry-run --baseline /path/to/issue.md --candi
 ### iPad 操作
 
 1. 功能 PR 审阅完成并合并后，在 **Actions → Prepare ReleaseCheck review materials → Run workflow** 选择 `main`。打开运行摘要查看静态风险，`release-check-review` 提供候选字节和审核记录。准备流程只有仓库读取权限。
-2. 将运行链接交给有推送权限的助手。助手可通过 `gh run download <运行 ID> -n release-check-review` 取得材料，核对后另开批准 PR，只提交 `release-inputs/` 和历史审核记录。iPad 无需上传。你核对差异后，在该批准 PR 分支用 GitHub 网页编辑 `manifests/approved.json`，填入 `ReleaseCheck` 的 `version` 和 `manifest_sha256`。确认后由你手动合并批准 PR。
+2. 将运行链接交给有推送权限的助手。助手可通过 `gh run download <运行 ID> -n release-check-review` 取得材料。如果下载存储被代理拦截，助手可从同次运行日志里的 `QX_REVIEW_BUNDLE` 取得相同材料并重新校验。核对后另开批准 PR，只提交 `release-inputs/` 和历史审核记录。iPad 无需上传。你核对差异后，在该批准 PR 分支用 GitHub 网页编辑 `manifests/approved.json`，填入 `ReleaseCheck` 的 `version` 和 `manifest_sha256`。确认后由你手动合并批准 PR。
 3. 在 **Actions → Controlled Rewrite release → Run workflow** 选择 `main`，填写已批准的完整版本 ID 并确认。只有所有者能派发或重跑。发布会校验批准锁、候选路径、清单、文件哈希和固定来源字节。它只向发布分支追加版本，拒绝覆盖。推送后从固定发布提交的 raw URL 下载并比对，成功后摘要才显示可用链接。
 
 ### 个人仓库权限
