@@ -1,1 +1,58 @@
-
+{
+  "RedditAds": {
+    "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/refs/heads/master/AdBlock/RedditAds.conf",
+    "kind": "rewrite"
+  },
+  "RedditEnhance": {
+    "url": "https://gist.githubusercontent.com/RavelloH/68ed0626dae69a1ce7c8ad6887087ea1/raw/main.snippet",
+    "kind": "rewrite"
+  },
+  "BiliBiliAdsLite": {
+    "url": "https://ddgksf2013.top/rewrite/BiliBiliAdsLite.conf",
+    "kind": "rewrite"
+  },
+  "Spotify": {
+    "url": "https://raw.githubusercontent.com/app2smile/rules/master/module/spotify.conf",
+    "kind": "rewrite"
+  },
+  "StartUpAds": {
+    "url": "https://ddgksf2013.top/rewrite/StartUpAds.conf",
+    "kind": "rewrite"
+  },
+  "CaiYunAds": {
+    "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/AdBlock/CaiYunAds.conf",
+    "kind": "rewrite"
+  },
+  "ZhiHu": {
+    "url": "https://ddgksf2013.top/scripts/zhihu.ads.js",
+    "kind": "javascript"
+  },
+  "YouTubeAds": {
+    "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/AdBlock/YoutubeAds.conf",
+    "kind": "rewrite"
+  },
+  "AmapAds": {
+    "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/AdBlock/AmapAds.conf",
+    "kind": "rewrite"
+  },
+  "GoogleRedirect": {
+    "url": "https://raw.githubusercontent.com/ddgksf2013/Rewrite/master/Html/General.conf",
+    "kind": "rewrite"
+  },
+  "XiaoHongShu": {
+    "url": "https://ddgksf2013.top/rewrite/XiaoHongShuAds.conf",
+    "kind": "rewrite"
+  },
+  "BoxJS": {
+    "url": "https://raw.githubusercontent.com/chavyleung/scripts/master/box/rewrite/boxjs.rewrite.quanx.conf",
+    "kind": "rewrite"
+  },
+  "WeatherKit": {
+    "url": "https://github.com/NSRingo/WeatherKit/releases/latest/download/iRingo.WeatherKit.snippet",
+    "kind": "rewrite",
+    "redirect_hosts": [
+      "release-assets.githubusercontent.com",
+      "objects.githubusercontent.com"
+    ]
+  }
+}
