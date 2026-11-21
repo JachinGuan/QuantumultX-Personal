@@ -1,1 +1,6 @@
-{}
+{
+  "ReleaseCheck": {
+    "version": "dc05067119c824b071c8b60ef576c9bffa46b7cdcb0f074e4b05a772b5d49aed",
+    "manifest_sha256": "9b51799d4252907d4027dedfb04b7c1dc77e73cbe871fb829ef60e5aef9db23a"
+  }
+}
