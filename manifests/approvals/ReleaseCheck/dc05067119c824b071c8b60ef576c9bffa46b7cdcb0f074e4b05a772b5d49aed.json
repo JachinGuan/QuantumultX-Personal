@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "entry": "ReleaseCheck",
+  "version": "dc05067119c824b071c8b60ef576c9bffa46b7cdcb0f074e4b05a772b5d49aed",
+  "manifest_sha256": "9b51799d4252907d4027dedfb04b7c1dc77e73cbe871fb829ef60e5aef9db23a",
+  "files": {
+    "https://raw.githubusercontent.com/JachinGuan/QuantumultX-Personal/569736848328353b218f507709413163f5e8bc7c/pilot/ReleaseCheck.conf": "0991634f1d53fd6aa8902c9d4aae0555207c0f411d61d4b5506ac600a502b09f"
+  }
+}
