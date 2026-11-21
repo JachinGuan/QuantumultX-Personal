@@ -98,3 +98,15 @@ class ModuleRegistryTests(unittest.TestCase):
     def test_managed_flag_cannot_add_a_publication_policy(self):
         with self.assertRaisesRegex(ValueError, "专用发布校验策略"):
             publish_rewrite.load_snapshot(ROOT / "release-inputs", "a" * 64, module="AmapAds")
+
+
+    def test_researched_third_party_pilots_remain_monitor_only(self):
+        registry = ROOT / "upstream/modules.json"
+        modules = module_registry.load_modules(registry)
+        for name in ("CaiYunAds", "RedditAds", "RedditEnhance"):
+            with self.subTest(module=name):
+                self.assertTrue(modules[name]["monitor_enabled"])
+                with self.assertRaisesRegex(ValueError, "未接管发布"):
+                    module_registry.require_publication(name, registry)
+                with self.assertRaisesRegex(ValueError, "专用发布校验策略"):
+                    publish_rewrite.publication_policy(name)
