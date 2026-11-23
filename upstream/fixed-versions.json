@@ -1,0 +1,21 @@
+{
+  "license": {
+    "Spotify": "仓库 MIT，打包依赖与再分发范围待核对",
+    "BoxJS": "仓库 GPL-3.0，分发义务与闭包待核对",
+    "WeatherKit": "仓库 Apache-2.0，发布包内的依赖许可待核对",
+    "YouTubeAds": "脚本仓库 Apache-2.0，入口许可未知"
+  },
+  "references": {
+    "RedditEnhance": [
+      {
+        "source": "https://gist.githubusercontent.com/RavelloH/68ed0626dae69a1ce7c8ad6887087ea1/raw/main.snippet",
+        "entry": "https://gist.githubusercontent.com/RavelloH/68ed0626dae69a1ce7c8ad6887087ea1/raw/50b1b657262d915484bae98d5acc91b6473d0226/main.snippet",
+        "sha256": "40a0393b956218e64c53832e1fd17dc93756dacac7218e22e7211bd11d5b11ff",
+        "dependencies": {
+          "https://gist.github.com/RavelloH/68ed0626dae69a1ce7c8ad6887087ea1/raw/c008127260bc4dcd550fcd98285048cf6176f602/main.js": "1d3ea8c1046be208540795de979fd64d00a2b4573ae8af61f8595dd418e58d47"
+        },
+        "license_confirmed": false
+      }
+    ]
+  }
+}
