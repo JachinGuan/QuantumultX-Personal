@@ -209,7 +209,7 @@ class GraphTests(unittest.TestCase):
         with patch.object(graph, "GraphMonitor", side_effect=setup):
             report, body, comments = monitor.graph_report(SOURCES, previous, previous_graph, {})
             self.assertIn("首次建立依赖基线", report)
-            self.assertTrue(comments)
+            self.assertFalse(comments)
             resumed = monitor.read_state(body)
             self.assertEqual(resumed["Example"]["legacy_sha256"], "a" * 64)
             report, _, comments = monitor.graph_report(SOURCES, resumed, graph.read_graph(body), {})
@@ -244,16 +244,17 @@ class GraphTests(unittest.TestCase):
             saved.parent.mkdir(parents=True)
             saved.write_bytes(b"approved bytes")
             original = {path: path.read_bytes() for path in (lock, saved)}
+            replies = [{"title": monitor.ISSUE_TITLE, "body": issue_body}, {}, [], {}, {}]
             with (
                 patch.object(monitor, "ROOT", repo),
                 patch.object(graph, "GraphMonitor", side_effect=setup),
                 patch.dict(os.environ, {"GH_REPO": "sample/repo", "GH_TOKEN": "fixture"}),
                 patch("sys.argv", ["check_upstream.py"]),
                 patch("builtins.print"),
-                patch.object(monitor, "github_request", return_value={"title": monitor.ISSUE_TITLE, "body": issue_body}) as api,
+                patch.object(monitor, "github_request", side_effect=replies) as api,
             ):
                 monitor.main()
-            self.assertEqual(api.call_count, 2)
+            self.assertEqual(api.call_count, 5)
             _, _, suffix, payload, method = api.call_args.args
             self.assertEqual((suffix, method), ("", "PATCH"))
             self.assertEqual(monitor.read_state(payload["body"]), baseline)
