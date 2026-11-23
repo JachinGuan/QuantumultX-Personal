@@ -59,6 +59,18 @@ class FixedVersionsTests(unittest.TestCase):
             self.assertIsNone(book.assess(source, BASELINE, COMPLETE, {"signals": signals}, references, verify)[2])
             self.assertEqual(source["url"], SOURCE)
 
+    def test_pin_must_keep_publisher_path_and_include_license_evidence(self):
+        verify = Mock(return_value=True)
+        for record in (
+            {**PINNED, "entry": PIN.replace("/demo/", "/someone-else/")},
+            {**PINNED, "entry": PIN.replace("/a.conf", "/other.conf")},
+            {**PINNED, "license_evidence": None},
+        ):
+            with self.subTest(record=record):
+                candidate = book.assess({"url": SOURCE}, BASELINE, COMPLETE, {}, [record], verify)[2]
+                self.assertIsNone(candidate)
+        verify.assert_not_called()
+
     def test_unknown_client_and_frozen_module(self):
         module = {"client_enabled": None, "monitor_enabled": True, "update_policy": "frozen"}
         verify = Mock(return_value=True)
